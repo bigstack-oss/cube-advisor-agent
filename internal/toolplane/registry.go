@@ -62,6 +62,16 @@ func New(tools []Tool, audit Auditor) (*Registry, error) {
 	return r, nil
 }
 
+// SetRunnerForTest replaces the executor.
+//
+// Named for its only legitimate use. Tests in other packages need to exercise
+// the registry without shelling out, and the alternative — exporting the
+// executor as a field — would make "what actually runs a tool" configurable in
+// production, which is precisely what should not be.
+func (r *Registry) SetRunnerForTest(fn func(ctx context.Context, argv []string, maxBytes int) ([]byte, error)) {
+	r.run = fn
+}
+
 // Names returns the registered tool names, sorted — what the agent advertises.
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.tools))
