@@ -13,9 +13,12 @@
 package tunnel
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
@@ -28,11 +31,22 @@ import (
 // connects and then says nothing must not hold a slot.
 const handshakeTimeout = 30 * time.Second
 
+// maxHeaderBytes bounds a channel-open header, so a peer cannot make the
+// receiver buffer without limit before anything has been authorised.
+const maxHeaderBytes = 8192
+
 // Session is one multiplexed tunnel.
 type Session struct {
 	mux *yamux.Session
 	ctl net.Conn // the control stream, held open for the session's life
 	ack tunnelproto.HelloAck
+
+	// One decoder for the control stream's lifetime. A json.Decoder reads in
+	// chunks and keeps what it over-read, so constructing a new one per message
+	// silently discards whatever the previous one buffered — losing the message
+	// after the one just parsed.
+	ctlDec *json.Decoder
+	ctlEnc *json.Encoder
 }
 
 // Ack is the handshake result the peer returned (agent side) or produced
@@ -68,12 +82,13 @@ func Dial(ctx context.Context, conn net.Conn, hello tunnelproto.Hello) (*Session
 	}
 	_ = ctl.SetDeadline(deadline(ctx))
 
-	if err := json.NewEncoder(ctl).Encode(hello); err != nil {
+	enc, dec := json.NewEncoder(ctl), json.NewDecoder(ctl)
+	if err := enc.Encode(hello); err != nil {
 		mux.Close()
 		return nil, fmt.Errorf("tunnel: send hello: %w", err)
 	}
 	var ack tunnelproto.HelloAck
-	if err := json.NewDecoder(ctl).Decode(&ack); err != nil {
+	if err := dec.Decode(&ack); err != nil {
 		mux.Close()
 		return nil, fmt.Errorf("tunnel: read hello ack: %w", err)
 	}
@@ -82,7 +97,7 @@ func Dial(ctx context.Context, conn net.Conn, hello tunnelproto.Hello) (*Session
 		return nil, fmt.Errorf("tunnel: refused by the service: %s", ack.Reason)
 	}
 	_ = ctl.SetDeadline(time.Time{})
-	return &Session{mux: mux, ctl: ctl, ack: ack}, nil
+	return &Session{mux: mux, ctl: ctl, ack: ack, ctlDec: dec, ctlEnc: enc}, nil
 }
 
 // Accept performs the SaaS side over an established conn: it becomes the
@@ -103,13 +118,14 @@ func Accept(ctx context.Context, conn net.Conn, admit func(tunnelproto.Hello) tu
 	}
 	_ = ctl.SetDeadline(deadline(ctx))
 
+	enc, dec := json.NewEncoder(ctl), json.NewDecoder(ctl)
 	var hello tunnelproto.Hello
-	if err := json.NewDecoder(ctl).Decode(&hello); err != nil {
+	if err := dec.Decode(&hello); err != nil {
 		mux.Close()
 		return nil, fmt.Errorf("tunnel: read hello: %w", err)
 	}
 	ack := admit(hello)
-	if err := json.NewEncoder(ctl).Encode(ack); err != nil {
+	if err := enc.Encode(ack); err != nil {
 		mux.Close()
 		return nil, fmt.Errorf("tunnel: send hello ack: %w", err)
 	}
@@ -118,14 +134,24 @@ func Accept(ctx context.Context, conn net.Conn, admit func(tunnelproto.Hello) tu
 		return nil, fmt.Errorf("tunnel: refused agent on %s: %s", hello.ClusterID, ack.Reason)
 	}
 	_ = ctl.SetDeadline(time.Time{})
-	return &Session{mux: mux, ctl: ctl, ack: ack}, nil
+	return &Session{mux: mux, ctl: ctl, ack: ack, ctlDec: dec, ctlEnc: enc}, nil
 }
 
 // Channel is an accepted stream plus the request that opened it.
+//
+// Read is overridden rather than inherited from the embedded Conn. The header
+// is parsed with a json.Decoder, which reads in chunks and keeps whatever it
+// over-read — for a console channel that surplus is the first bytes the user
+// typed. Reading the raw stream afterwards would silently drop them, so the
+// decoder's buffered remainder is spliced in front.
 type Channel struct {
 	net.Conn
 	Open tunnelproto.ChannelOpen
+
+	r io.Reader // buffered remainder, then the stream
 }
+
+func (c *Channel) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // OpenChannel opens a new channel to a symbolic target.
 //
@@ -160,24 +186,37 @@ func (s *Session) AcceptChannel(ctx context.Context) (*Channel, error) {
 		return nil, err
 	}
 	_ = stream.SetReadDeadline(deadline(ctx))
-	var open tunnelproto.ChannelOpen
-	if err := json.NewDecoder(stream).Decode(&open); err != nil {
+	// Line framing, read through a bufio.Reader that becomes the channel's
+	// reader afterwards. Any bytes the buffer over-read are the start of the
+	// payload, and continuing to read from br yields them before the stream —
+	// so nothing the peer sent alongside the header is lost.
+	br := bufio.NewReaderSize(stream, maxHeaderBytes)
+	line, err := br.ReadSlice('\n')
+	if err != nil {
 		stream.Close()
+		if errors.Is(err, bufio.ErrBufferFull) {
+			return nil, fmt.Errorf("tunnel: channel-open header exceeds %d bytes", maxHeaderBytes)
+		}
 		return nil, fmt.Errorf("tunnel: read channel open: %w", err)
+	}
+	var open tunnelproto.ChannelOpen
+	if err := json.Unmarshal(line, &open); err != nil {
+		stream.Close()
+		return nil, fmt.Errorf("tunnel: parse channel open: %w", err)
 	}
 	if err := open.Validate(); err != nil {
 		stream.Close()
 		return nil, fmt.Errorf("tunnel: rejecting channel open from peer: %w", err)
 	}
 	_ = stream.SetReadDeadline(time.Time{})
-	return &Channel{Conn: stream, Open: open}, nil
+	return &Channel{Conn: stream, Open: open, r: br}, nil
 }
 
 // SendKillSwitch tells the peer to drop everything. The customer holds this
 // control, so it takes effect on the peer's next read rather than waiting for
 // anything in flight to finish.
 func (s *Session) SendKillSwitch(k tunnelproto.KillSwitch) error {
-	if err := json.NewEncoder(s.ctl).Encode(k); err != nil {
+	if err := s.ctlEnc.Encode(k); err != nil {
 		return fmt.Errorf("tunnel: send kill switch: %w", err)
 	}
 	return nil
@@ -186,7 +225,7 @@ func (s *Session) SendKillSwitch(k tunnelproto.KillSwitch) error {
 // AwaitKillSwitch blocks until the peer sends one.
 func (s *Session) AwaitKillSwitch() (tunnelproto.KillSwitch, error) {
 	var k tunnelproto.KillSwitch
-	err := json.NewDecoder(s.ctl).Decode(&k)
+	err := s.ctlDec.Decode(&k)
 	return k, err
 }
 
