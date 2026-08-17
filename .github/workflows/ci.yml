@@ -14,3 +14,19 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./...
+
+      # Run the suite again pinned to a single processor, with the race
+      # detector.
+      #
+      # This is not belt-and-braces. The transport's first bug — a header
+      # decoder that consumed the payload behind it — only reproduced when two
+      # writes coalesced into one read, which a multi-core machine almost never
+      # does and a single-processor one reliably does. It passed locally in
+      # milliseconds and hung a CI job for fifteen minutes.
+      #
+      # Serialised scheduling is the cheapest way to make that class of bug
+      # deterministic, and this package is concurrency all the way down.
+      - name: test under serialised scheduling
+        env:
+          GOMAXPROCS: '1'
+        run: go test -race -timeout 5m ./...
