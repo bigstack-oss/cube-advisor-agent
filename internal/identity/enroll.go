@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/bigstack-oss/cube-advisor-agent/pkg/enrollproto"
 )
 
 // Enrollment errors a caller should distinguish, because the operator's next
@@ -19,20 +21,12 @@ var (
 	ErrAlreadyEnrolled = errors.New("identity: this node already has an identity")
 )
 
-// EnrollRequest is what the agent sends. A CSR and a cluster name — nothing
-// else, and in particular no key material.
-type EnrollRequest struct {
-	ClusterID    string `json:"clusterId"`
-	CSR          string `json:"csr"`
-	Fingerprint  string `json:"fingerprint"` // so the operator can compare on both screens
-	AgentVersion string `json:"agentVersion"`
-}
-
-// EnrollResponse is what the SaaS returns.
-type EnrollResponse struct {
-	Certificate string `json:"certificate"`
-	CA          string `json:"ca"`
-}
+// The wire shapes live in pkg/enrollproto, which the SaaS imports too — one
+// definition rather than two that must be kept in step.
+type (
+	EnrollRequest  = enrollproto.Request
+	EnrollResponse = enrollproto.Response
+)
 
 // Enroller exchanges a pairing token for a signed identity.
 type Enroller struct {
@@ -83,7 +77,7 @@ func (e *Enroller) Enroll(ctx context.Context, clusterID, token string) (*Identi
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		e.BaseURL+"/api/v1/enroll", bytes.NewReader(body))
+		e.BaseURL+enrollproto.Path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
