@@ -46,11 +46,45 @@ may only target a tool, and a `console` channel may never target one. That is
 what makes "the AI has no path to a shell" a structural claim rather than a
 convention in the agent's code.
 
+## Releases and verification
+
+`mkrelease` builds one binary per architecture and writes `manifest.txt` beside
+them — deliberately **unsigned**. The release signing key lives in the SaaS
+repository's CI, not in this public one (ADR 0003): a build pipeline that could
+also sign is a pipeline that can mint releases.
+
+```sh
+go run ./cmd/mkrelease -out dist -version 0.2.0
+```
+
+The manifest is sha256sum's own format, with metadata in comment lines that
+`sha256sum -c` ignores. That is not incidental — the verifier lives in
+**cubecos**, is plain shell, and must be short enough for a reviewer to read in
+full:
+
+```sh
+openssl dgst -sha256 -verify release.pub -signature manifest.txt.sig manifest.txt
+sha256sum -c manifest.txt
+```
+
+Two commands, no bespoke parser on the verifying side, because a bespoke parser
+written in shell is where the bugs would be. The public key is baked into the
+CubeCOS image; this repository is not its source.
+
+The verifier itself is **not** in this repository, and must not be: a verifier
+that shares a build pipeline with the artifact it verifies means one compromised
+pipeline defeats both.
+
 ## Status
 
-Early. `pkg/tunnelproto` defines the protocol, version negotiation and target
-validation; the agent itself (tool plane, console plane, transport) is not built
-yet. Tracked in the private SaaS repo's issue #6.
+Early, but no longer only a protocol. Built and tested: the wire protocol and
+its target validation, the multiplexed transport with flow control and
+reconnect, the read-only tool plane and its allowlist, the serve loop joining
+the two, the enrolled per-cluster identity, and the release manifest.
+
+Not built: the console plane, the daemon that wires the pieces into a running
+agent (`cmd/agent` is a stub), and the OS-side verifier — which belongs in
+cubecos, not here. Tracked in the private SaaS repo's issues #6 and #7.
 
 ## Licence
 
