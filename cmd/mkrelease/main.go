@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bigstack-oss/cube-advisor-agent/internal/release"
+	"github.com/bigstack-oss/cube-advisor-agent/pkg/release"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
 )
 

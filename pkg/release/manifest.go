@@ -13,6 +13,12 @@
 // carried in comment lines that sha256sum ignores. Nothing on the verifying
 // side parses a bespoke format, because a bespoke parser in shell is where the
 // bugs would be.
+//
+// This lives in pkg/ rather than internal/ because the format has three
+// consumers in three repositories: this one produces it, the SaaS signs and
+// serves it, and cubecos verifies it. Anything crossing a repository boundary
+// belongs in pkg/ — an unimportable contract gets restated on the other side,
+// and then there are two of them.
 package release
 
 import (
