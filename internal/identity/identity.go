@@ -216,3 +216,17 @@ func (i *Identity) TLSConfig(serverName string) (*tls.Config, error) {
 	}
 	return cfg, nil
 }
+
+// Remove deletes a stored identity.
+//
+// Used only by an explicit re-enrolment. It is a separate function rather than
+// something Save does implicitly, because silently replacing an identity is how
+// a cluster loses the certificate the SaaS is currently accepting.
+func Remove(dir string) error {
+	for _, name := range []string{keyFileName, crtFileName, caFileName} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("identity: removing %s: %w", name, err)
+		}
+	}
+	return nil
+}
