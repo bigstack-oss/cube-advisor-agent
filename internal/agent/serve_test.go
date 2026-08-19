@@ -112,7 +112,7 @@ func connPair(t *testing.T) (net.Conn, net.Conn) {
 
 // callTool does what the SaaS does: open a tool channel, send arguments, read
 // the result.
-func callTool(t *testing.T, saas *tunnel.Session, id uint32, name string, args map[string]string) Result {
+func callTool(t *testing.T, saas *tunnel.Session, id uint32, name string, args map[string]string) tunnelproto.ToolResult {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -131,7 +131,7 @@ func callTool(t *testing.T, saas *tunnel.Session, id uint32, name string, args m
 		t.Fatalf("send args: %v", err)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var res Result
+	var res tunnelproto.ToolResult
 	if err := json.NewDecoder(conn).Decode(&res); err != nil {
 		t.Fatalf("read result for %s: %v", name, err)
 	}
@@ -175,11 +175,11 @@ func TestRefusalsAreOpaqueToTheSaaSButDetailedLocally(t *testing.T) {
 	unknown := callTool(t, saas, 1, "run_anything", nil)
 	badArg := callTool(t, saas, 2, "cluster_health", map[string]string{"{group}": "Storage; rm -rf /"})
 
-	for _, r := range []Result{unknown, badArg} {
+	for _, r := range []tunnelproto.ToolResult{unknown, badArg} {
 		if r.OK {
 			t.Errorf("a refused call reported success: %+v", r)
 		}
-		if r.Error != refusedReason {
+		if r.Error != tunnelproto.RefusedReason {
 			t.Errorf("refusal leaked detail to the SaaS: %q", r.Error)
 		}
 	}
@@ -273,7 +273,7 @@ func TestASlowCallDoesNotStallOtherChannels(t *testing.T) {
 	_ = json.NewEncoder(slow).Encode(map[string]string{"{unit}": "keystone", "{lines}": "50"})
 
 	// A second call must complete while the first is still stuck.
-	done := make(chan Result, 1)
+	done := make(chan tunnelproto.ToolResult, 1)
 	go func() { done <- callTool(t, saas, 2, "cluster_check", nil) }()
 
 	select {
@@ -329,7 +329,7 @@ func TestServeReturnsCleanlyWhenTheSessionEnds(t *testing.T) {
 }
 
 func TestReadArgsRejectsAnOversizedFrame(t *testing.T) {
-	big := strings.Repeat("a", maxArgsBytes+10) + "\n"
+	big := strings.Repeat("a", tunnelproto.MaxToolArgsBytes+10) + "\n"
 	if _, err := readArgs(strings.NewReader(big)); err == nil {
 		t.Error("an oversized argument frame was accepted")
 	}

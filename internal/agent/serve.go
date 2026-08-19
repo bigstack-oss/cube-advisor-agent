@@ -9,11 +9,8 @@
 package agent
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -25,23 +22,6 @@ import (
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnel"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
 )
-
-// Result is what a tool channel returns.
-//
-// Success is explicit rather than inferred from the output, so the SaaS never
-// has to parse tool output to find out whether the tool ran. Refusals carry a
-// flat reason: the SaaS learns that it was refused, not which check refused it,
-// because a precise refusal is a probe oracle.
-type Result struct {
-	OK     bool   `json:"ok"`
-	Output string `json:"output,omitempty"`
-	Error  string `json:"error,omitempty"`
-}
-
-// refusedReason is the single reason string a refused call returns. Every
-// refusal looks identical from the SaaS's side; the specific cause is in the
-// customer's local audit log, where it belongs.
-const refusedReason = "refused"
 
 // Server serves channels for one session.
 type Server struct {
@@ -92,7 +72,7 @@ func (s *Server) handle(ctx context.Context, ch *tunnel.Channel) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("agent: handler panicked on %s: %v", ch.Open.Target, r)
-			_ = writeResult(ch, Result{OK: false, Error: refusedReason})
+			_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
 		}
 	}()
 
@@ -104,7 +84,7 @@ func (s *Server) handle(ctx context.Context, ch *tunnel.Channel) {
 		// tool channel from naming a console target; this refuses the converse
 		// so the tool handler can never grow into a console one by accident.
 		log.Printf("agent: tool handler refusing a %s channel", ch.Open.Kind)
-		_ = writeResult(ch, Result{OK: false, Error: refusedReason})
+		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
 	}
 }
 
@@ -113,7 +93,7 @@ func (s *Server) serveTool(ctx context.Context, ch *tunnel.Channel) {
 	// never from a body field the SaaS could disagree with itself about. One
 	// source of truth for "which tool", and it is the one that was checked.
 	if ch.Open.Target.Kind != tunnelproto.TargetTool {
-		_ = writeResult(ch, Result{OK: false, Error: refusedReason})
+		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
 		return
 	}
 	name := ch.Open.Target.Name
@@ -121,7 +101,7 @@ func (s *Server) serveTool(ctx context.Context, ch *tunnel.Channel) {
 	args, err := readArgs(ch)
 	if err != nil {
 		log.Printf("agent: %s: bad arguments: %v", name, err)
-		_ = writeResult(ch, Result{OK: false, Error: refusedReason})
+		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
 		return
 	}
 
@@ -138,45 +118,20 @@ func (s *Server) serveTool(ctx context.Context, ch *tunnel.Channel) {
 		// distinction — and the reason — is in the local audit log, which the
 		// customer reads and the SaaS does not.
 		log.Printf("agent: %s failed: %v", name, err)
-		_ = writeResult(ch, Result{OK: false, Error: refusedReason})
+		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
 		return
 	}
-	_ = writeResult(ch, Result{OK: true, Output: string(out)})
+	_ = writeResult(ch, tunnelproto.ToolResult{OK: true, Output: string(out)})
 }
 
-// maxArgsBytes bounds the argument frame. The registry rejects unknown
-// arguments anyway; this stops a peer making the agent buffer first.
-const maxArgsBytes = 8 << 10
-
-// readArgs reads the argument frame: exactly one newline-terminated JSON
-// object, `{}` when the tool takes none.
-//
-// Line-framed rather than read-to-EOF, and the reason is concrete: a channel is
-// a yamux stream, and yamux streams have no half-close. A caller cannot signal
-// "I have finished sending arguments" without closing the stream it is about to
-// read the result from, so reading to EOF here would deadlock every call. The
-// framing matches the channel-open header for the same reason.
+// readArgs reads the argument frame. The framing itself is the protocol's
+// (pkg/tunnelproto), so both sides of the wire share one implementation.
 func readArgs(r io.Reader) (map[string]string, error) {
-	br := bufio.NewReaderSize(r, maxArgsBytes)
-	line, err := br.ReadSlice('\n')
-	if err != nil {
-		if errors.Is(err, bufio.ErrBufferFull) {
-			return nil, fmt.Errorf("argument frame exceeds %d bytes", maxArgsBytes)
-		}
-		return nil, err
-	}
-	if len(strings.TrimSpace(string(line))) == 0 {
-		return nil, nil
-	}
-	var args map[string]string
-	if err := json.Unmarshal(line, &args); err != nil {
-		return nil, err
-	}
-	return args, nil
+	return tunnelproto.ReadToolArgs(r)
 }
 
-func writeResult(w io.Writer, r Result) error {
-	return json.NewEncoder(w).Encode(r)
+func writeResult(w io.Writer, r tunnelproto.ToolResult) error {
+	return tunnelproto.WriteToolResult(w, r)
 }
 
 // isSessionOver reports whether an accept error means the tunnel has gone,
