@@ -45,6 +45,8 @@ func main() {
 	switch os.Args[1] {
 	case "enroll":
 		os.Exit(enrollCmd(os.Args[2:]))
+	case "run":
+		os.Exit(runCmd(os.Args[2:]))
 	case "status":
 		os.Exit(statusCmd(os.Args[2:]))
 	case "version", "-version", "--version":
@@ -60,6 +62,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `cube-advisor-agent %s
 
   enroll  -server <url> [-token <t> | -token-file <path> | -token-stdin]
+  run     -server <host:port> [-dir <path>] [-audit <path>]
   status
   version
 `, version)
