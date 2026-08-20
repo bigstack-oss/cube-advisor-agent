@@ -34,10 +34,13 @@ import (
 )
 
 // Artifact is one released file.
+//
+// No size field: the manifest's format is sha256sum's, which has no column for
+// one, so a size here could only ever be set and never published — and a
+// number that is carried but never checked invites being trusted.
 type Artifact struct {
 	Name   string // base name as published, e.g. cube-advisor-agent_linux_amd64
 	SHA256 string // lowercase hex
-	Size   int64
 }
 
 // Manifest describes one release.
@@ -73,7 +76,10 @@ func (m Manifest) Render() []byte {
 	fmt.Fprintf(&b, "# %s: %s\n", keyCommit, m.Commit)
 	fmt.Fprintf(&b, "# %s: %d\n", keyProtocol, m.ProtocolVersion)
 	for _, a := range arts {
-		// Two spaces then the name: sha256sum's binary-mode format.
+		// Two spaces then the name: sha256sum's text-mode format. Binary mode
+		// writes " *name", which `sha256sum -c` also reads, but text mode is
+		// what a plain `sha256sum <file>` produces — so an operator checking
+		// our work by hand gets bytes that match, not merely bytes that pass.
 		fmt.Fprintf(&b, "%s  %s\n", a.SHA256, a.Name)
 	}
 	return []byte(b.String())
@@ -127,33 +133,60 @@ func ParseManifest(r io.Reader) (Manifest, error) {
 	return m, nil
 }
 
-// Build produces a manifest for every regular file in dir.
+// Build produces a manifest for exactly the artifacts named in want.
 //
-// Directories are walked rather than globbed so a release cannot silently omit
-// an architecture because someone forgot to extend a pattern.
-func Build(dir, version, commit string, protocolVersion int) (Manifest, error) {
+// Both directions are errors, and deliberately so, because signing is an
+// assertion about what this release contains:
+//
+//   - A named artifact that is not there fails. This is the property the
+//     earlier directory walk was protecting — a release must not silently omit
+//     an architecture — kept by making the caller's build list the one source
+//     of truth rather than a second pattern that can drift from it.
+//   - A file in dir that was not asked for fails, rather than being signed in.
+//     A stale binary from an earlier run with different targets would otherwise
+//     become a manifest entry with no build behind it, and the node-side
+//     verifier requires every entry of a whole-release check to be present — so
+//     that release could never verify again.
+//
+// The manifest and its signature are not artifacts and are skipped: a manifest
+// cannot contain its own digest.
+func Build(dir string, want []string, version, commit string, protocolVersion int) (Manifest, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("release: read %s: %w", dir, err)
 	}
-	m := Manifest{Version: version, Commit: commit, ProtocolVersion: protocolVersion}
+
+	asked := make(map[string]bool, len(want))
+	for _, n := range want {
+		asked[n] = true
+	}
+	present := map[string]bool{}
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() || e.Name() == ManifestName || e.Name() == SignatureName {
 			continue
 		}
-		// Never digest the manifest or its signature into itself.
-		if e.Name() == ManifestName || e.Name() == SignatureName {
-			continue
+		if !asked[e.Name()] {
+			return Manifest{}, fmt.Errorf(
+				"release: %s is in %s but is not part of this release; "+
+					"remove it rather than signing it in", e.Name(), dir)
 		}
-		info, err := e.Info()
+		present[e.Name()] = true
+	}
+
+	m := Manifest{Version: version, Commit: commit, ProtocolVersion: protocolVersion}
+	// Iterated over the sorted request, not the directory, so two builds of one
+	// commit render byte-identical manifests and therefore identical signatures.
+	names := append([]string(nil), want...)
+	sort.Strings(names)
+	for _, name := range names {
+		if !present[name] {
+			return Manifest{}, fmt.Errorf("release: %s was not built into %s", name, dir)
+		}
+		sum, err := fileSHA256(filepath.Join(dir, name))
 		if err != nil {
 			return Manifest{}, err
 		}
-		sum, err := fileSHA256(filepath.Join(dir, e.Name()))
-		if err != nil {
-			return Manifest{}, err
-		}
-		m.Artifacts = append(m.Artifacts, Artifact{Name: e.Name(), SHA256: sum, Size: info.Size()})
+		m.Artifacts = append(m.Artifacts, Artifact{Name: name, SHA256: sum})
 	}
 	if len(m.Artifacts) == 0 {
 		return Manifest{}, fmt.Errorf("release: no artifacts in %s", dir)
