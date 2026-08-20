@@ -2,11 +2,17 @@ package tunnel
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 	"net/http"
 
 	"github.com/coder/websocket"
 )
+
+// WSPath is the URL path that carries the tunnel websocket. It is wire
+// contract: an agent and a SaaS that disagree on it never reach the Hello
+// exchange, so it lives here where both sides import it.
+const WSPath = "/tunnel"
 
 // The websocket is deliberately thin here: it produces a net.Conn and the
 // session layer does the rest. Keeping the transport swappable is what lets the
@@ -27,6 +33,13 @@ func DialWS(ctx context.Context, url string, hdr http.Header, tlsClient *http.Cl
 	}
 	// Binary frames: the session layer owns framing, the websocket just moves bytes.
 	return websocket.NetConn(context.Background(), c, websocket.MessageBinary), nil
+}
+
+// NewTLSClient returns the http.Client DialWS needs for a wss URL secured by
+// cfg. The transport is HTTP/1.1 only — the websocket upgrade is an HTTP/1.1
+// mechanism, and negotiating h2 would break it.
+func NewTLSClient(cfg *tls.Config) *http.Client {
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: cfg}}
 }
 
 // AcceptWS upgrades an inbound request and returns it as a net.Conn.

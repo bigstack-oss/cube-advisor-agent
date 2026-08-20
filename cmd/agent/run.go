@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -20,10 +19,12 @@ import (
 
 // runCmd connects to the SaaS and serves the tool plane, forever.
 //
-// The connection is outbound-only mTLS: the identity enrollment issued is the
-// client certificate, and the SaaS's tunnel endpoint must present a
-// certificate chaining to the same enrollment CA — the agent trusts nothing
-// else, and there is no flag to loosen that.
+// The connection is outbound-only wss over mTLS: the identity enrollment
+// issued is the client certificate, and the SaaS's tunnel endpoint must
+// present a certificate chaining to the same enrollment CA — the agent trusts
+// nothing else, and there is no flag to loosen that. Websocket framing is what
+// lets the single outbound connection traverse egress proxies that only pass
+// HTTPS.
 func runCmd(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	addr := fs.String("server", "", "SaaS tunnel address, host:port")
@@ -79,9 +80,10 @@ func runCmd(args []string) int {
 		AgentVersion:    version,
 		ProtocolVersion: tunnelproto.Version,
 	}
+	url := "wss://" + *addr + tunnel.WSPath
+	httpClient := tunnel.NewTLSClient(tlsCfg)
 	connect := func(ctx context.Context) (*tunnel.Session, error) {
-		d := tls.Dialer{Config: tlsCfg}
-		conn, err := d.DialContext(ctx, "tcp", *addr)
+		conn, err := tunnel.DialWS(ctx, url, nil, httpClient)
 		if err != nil {
 			return nil, err
 		}
