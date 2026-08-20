@@ -34,7 +34,7 @@ func releaseDir(t *testing.T) (dir string, m Manifest) {
 			t.Fatal(err)
 		}
 	}
-	m, err := Build(dir, "0.2.0", "abc1234", 1)
+	m, err := Build(dir, releaseArtifacts, "0.2.0", "abc1234", 1)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -42,6 +42,13 @@ func releaseDir(t *testing.T) (dir string, m Manifest) {
 		t.Fatal(err)
 	}
 	return dir, m
+}
+
+// releaseArtifacts is what releaseDir writes -- the caller's own build list,
+// which is what Build now digests.
+var releaseArtifacts = []string{
+	"cube-advisor-agent_linux_amd64",
+	"cube-advisor-agent_linux_arm64",
 }
 
 // The whole design rests on this: sha256sum -c must accept the manifest with no
@@ -198,7 +205,7 @@ func TestRoundTrip(t *testing.T) {
 }
 
 func TestBuildRefusesAnEmptyDirectory(t *testing.T) {
-	if _, err := Build(t.TempDir(), "0.1.0", "abc", 1); err == nil {
+	if _, err := Build(t.TempDir(), nil, "0.1.0", "abc", 1); err == nil {
 		t.Error("a release with no artifacts was accepted")
 	}
 }
@@ -209,7 +216,7 @@ func TestBuildSkipsTheManifestAndSignature(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, SignatureName), []byte("sig"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m, err := Build(dir, "0.2.0", "abc", 1)
+	m, err := Build(dir, releaseArtifacts, "0.2.0", "abc", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,5 +266,86 @@ func run(t *testing.T, name string, args ...string) {
 	out, err := exec.Command(name, args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
+	}
+}
+
+// A leftover from an earlier run must not be signed into this release.
+//
+// This is the bug the explicit build list exists to close: Build used to digest
+// every regular file it found, so a stale binary in the output directory became
+// a signed manifest entry. Worse, it was permanent -- the cubecos verifier
+// requires every entry of a whole-release check to be present, so a release
+// carrying a phantom entry could never verify again.
+func TestBuildRefusesAFileItWasNotAskedToRelease(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range releaseArtifacts {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("binary\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stale := filepath.Join(dir, "cube-advisor-agent_linux_riscv64")
+	if err := os.WriteFile(stale, []byte("last release's target\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Build(dir, releaseArtifacts, "0.2.0", "abc", 1)
+	if err == nil {
+		for _, a := range m.Artifacts {
+			if a.Name == "cube-advisor-agent_linux_riscv64" {
+				t.Fatal("a stale file was signed into the manifest")
+			}
+		}
+		t.Fatal("an unexpected file in the release directory was accepted silently")
+	}
+	if !strings.Contains(err.Error(), "riscv64") {
+		t.Errorf("error = %v, want it to name the unexpected file", err)
+	}
+}
+
+// The property the old directory walk was protecting: a release must not
+// silently omit an architecture. Naming the build list keeps it -- a target
+// that failed to build is now a hard error rather than an absent entry.
+func TestBuildRefusesAnArtifactThatIsNotThere(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, releaseArtifacts[0]), []byte("only one\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Build(dir, releaseArtifacts, "0.2.0", "abc", 1)
+	if err == nil {
+		t.Fatal("a release missing an architecture was accepted")
+	}
+	if !strings.Contains(err.Error(), releaseArtifacts[1]) {
+		t.Errorf("error = %v, want it to name the missing artifact", err)
+	}
+}
+
+func TestBuildDigestsExactlyWhatItWasAsked(t *testing.T) {
+	dir, m := releaseDir(t)
+	_ = dir
+	if len(m.Artifacts) != len(releaseArtifacts) {
+		t.Fatalf("artifacts = %d, want %d", len(m.Artifacts), len(releaseArtifacts))
+	}
+	got := map[string]bool{}
+	for _, a := range m.Artifacts {
+		got[a.Name] = true
+		if len(a.SHA256) != 64 {
+			t.Errorf("%s: digest %q is not a sha256", a.Name, a.SHA256)
+		}
+	}
+	for _, want := range releaseArtifacts {
+		if !got[want] {
+			t.Errorf("%s missing from the manifest", want)
+		}
+	}
+}
+
+// Order must not depend on directory iteration, or two builds of the same
+// commit would produce different manifests and different signatures.
+func TestBuildOrdersArtifactsByName(t *testing.T) {
+	_, m := releaseDir(t)
+	for i := 1; i < len(m.Artifacts); i++ {
+		if m.Artifacts[i-1].Name > m.Artifacts[i].Name {
+			t.Errorf("artifacts out of order: %s before %s",
+				m.Artifacts[i-1].Name, m.Artifacts[i].Name)
+		}
 	}
 }

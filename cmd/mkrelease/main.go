@@ -44,9 +44,14 @@ func main() {
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		log.Fatalf("mkrelease: %v", err)
 	}
+	// What this run built, which is exactly what gets digested. Collected by
+	// the loop that does the building, so the manifest cannot list a target
+	// nobody built or miss one that was.
+	var built []string
 	for _, t := range targets {
 		name := fmt.Sprintf("cube-advisor-agent_%s_%s", t.os, t.arch)
 		path := filepath.Join(*out, name)
+		built = append(built, name)
 		log.Printf("mkrelease: building %s", name)
 		cmd := exec.Command("go", "build",
 			"-trimpath", // so the manifest does not depend on where it was built
@@ -60,7 +65,7 @@ func main() {
 		}
 	}
 
-	m, err := release.Build(*out, *version, *commit, tunnelproto.Version)
+	m, err := release.Build(*out, built, *version, *commit, tunnelproto.Version)
 	if err != nil {
 		log.Fatalf("mkrelease: %v", err)
 	}
