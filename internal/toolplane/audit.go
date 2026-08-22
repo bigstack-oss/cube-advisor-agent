@@ -23,7 +23,11 @@ type ToolCall struct {
 	Allowed  bool              `json:"allowed"`
 	Reason   string            `json:"reason,omitempty"`
 	Duration time.Duration     `json:"durationMs,omitempty"`
-	Bytes    int               `json:"bytes,omitempty"`
+	Bytes    int               `json:"bytes,omitempty"` // as returned, marker included when truncated
+	// Truncated records that the command emitted more than the cap and the
+	// result was cut. The original size is unknowable by design — the runner
+	// stops reading one byte past the cap rather than buffering the excess.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // Auditor records tool calls.
