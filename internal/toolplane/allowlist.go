@@ -19,7 +19,10 @@
 //     customer can read.
 package toolplane
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Tool is one read-only operation the AI plane may invoke.
 type Tool struct {
@@ -32,11 +35,26 @@ type Tool struct {
 	// Argv is the exact command to run. Elements equal to a parameter
 	// placeholder (see Params) are replaced; everything else is literal.
 	// The first element is the executable — resolved from PATH, never a shell.
+	//
+	// Exactly one of Argv or Get is set: a tool is a local command or a
+	// cube-cos-api read, never both.
 	Argv []string
 
-	// Params declares each placeholder in Argv and the finite set of values it
-	// accepts. A parameter with no declared values is a bug, not a wildcard:
-	// Register rejects it.
+	// Get is a cube-cos-api path template for a read-only HTTP GET, e.g.
+	// "/api/v1/datacenters/{dc}/healths". The method is GET, always — there is
+	// no field to make it anything else, so a write to the management API is
+	// not expressible in this allowlist.
+	//
+	// {dc} is the agent's own datacenter, filled by the executor from its
+	// configuration — never a model parameter, so the SaaS cannot point a read
+	// at another cluster. Every other placeholder is a model parameter and must
+	// be declared in Params, exactly like Argv.
+	Get string
+
+	// Params declares each placeholder in Argv or Get and the finite set of
+	// values it accepts. A parameter with no declared values is a bug, not a
+	// wildcard: Register rejects it. {dc} is never declared here — it is
+	// executor context, not a caller argument.
 	Params map[string][]string
 
 	// ReadOnly must be true. It exists so that adding a mutating tool requires
@@ -102,7 +120,34 @@ var Allowlist = []Tool{
 		ReadOnly:       true,
 		MaxOutputBytes: 512 << 10,
 	},
+	// cube-cos-api reads. GET only, structurally — the resolved path is the
+	// whole request, and {dc} is filled by the executor, so the SaaS chooses
+	// which overview to fetch and nothing else. Start with the three
+	// zero-parameter overviews; per-resource reads (a named node, a service's
+	// health) are added the same way once their value sets are pinned down.
+	{
+		Name:        "cube_cos_healths",
+		Description: "Cluster health summary from cube-cos-api: every service and its state.",
+		Get:         "/api/v1/datacenters/{dc}/healths",
+		ReadOnly:    true,
+	},
+	{
+		Name:        "cube_cos_nodes",
+		Description: "The cluster's nodes and their roles/state from cube-cos-api.",
+		Get:         "/api/v1/datacenters/{dc}/nodes",
+		ReadOnly:    true,
+	},
+	{
+		Name:        "cube_cos_events",
+		Description: "Recent cluster events from cube-cos-api — the timeline of what changed.",
+		Get:         "/api/v1/datacenters/{dc}/events",
+		ReadOnly:    true,
+	},
 }
+
+// dcPlaceholder is the one placeholder the executor fills from its own config
+// rather than from a caller argument: the agent's datacenter.
+const dcPlaceholder = "{dc}"
 
 // validate checks a tool is well-formed for registration.
 func (t Tool) validate() error {
@@ -112,24 +157,53 @@ func (t Tool) validate() error {
 	if !t.ReadOnly {
 		return fmt.Errorf("tool %q is not declared read-only; the AI plane has no write path", t.Name)
 	}
-	if len(t.Argv) == 0 {
-		return fmt.Errorf("tool %q has an empty argv", t.Name)
+	hasArgv, hasGet := len(t.Argv) > 0, t.Get != ""
+	if hasArgv == hasGet {
+		return fmt.Errorf("tool %q must be exactly one of a command (Argv) or a cube-cos-api read (Get)", t.Name)
 	}
+	if hasGet {
+		return t.validateGet()
+	}
+	return t.validateCommand()
+}
+
+func (t Tool) validateCommand() error {
 	if isPlaceholder(t.Argv[0]) {
 		return fmt.Errorf("tool %q parameterises its executable; the program to run must be literal", t.Name)
 	}
-	// Every placeholder in argv must be declared, and every declaration must be
-	// used. An undeclared placeholder would be passed through literally; an
-	// unused declaration means the allowlist no longer says what it does.
+	// Every placeholder in argv must be a declared model parameter, and every
+	// declaration must be used. A command tool has no executor-filled slots.
+	return t.checkPlaceholders(t.Argv, nil)
+}
+
+func (t Tool) validateGet() error {
+	if !strings.HasPrefix(t.Get, "/") {
+		return fmt.Errorf("tool %q GET path must be absolute", t.Name)
+	}
+	// {dc} is executor context, not a caller argument: it may appear in the
+	// path without a Params declaration, and it must not be declared as one.
+	if _, declared := t.Params[dcPlaceholder]; declared {
+		return fmt.Errorf("tool %q declares %s; it is executor context, not a parameter", t.Name, dcPlaceholder)
+	}
+	return t.checkPlaceholders(pathSegments(t.Get), map[string]bool{dcPlaceholder: true})
+}
+
+// checkPlaceholders enforces that every placeholder in tokens is either an
+// exempt executor slot or a declared model parameter, and that every declared
+// parameter is used with a finite value set.
+func (t Tool) checkPlaceholders(tokens []string, exempt map[string]bool) error {
 	seen := map[string]bool{}
-	for _, a := range t.Argv {
-		if !isPlaceholder(a) {
+	for _, tok := range tokens {
+		if !isPlaceholder(tok) {
 			continue
 		}
-		if _, ok := t.Params[a]; !ok {
-			return fmt.Errorf("tool %q uses %s but does not declare it", t.Name, a)
+		if exempt[tok] {
+			continue
 		}
-		seen[a] = true
+		if _, ok := t.Params[tok]; !ok {
+			return fmt.Errorf("tool %q uses %s but does not declare it", t.Name, tok)
+		}
+		seen[tok] = true
 	}
 	for p, values := range t.Params {
 		if !seen[p] {
@@ -142,7 +216,13 @@ func (t Tool) validate() error {
 	return nil
 }
 
-// isPlaceholder reports whether an argv element is a parameter slot.
+// pathSegments splits a GET path into its slash-separated segments, so a
+// placeholder is matched as a whole segment and never as part of one.
+func pathSegments(path string) []string {
+	return strings.Split(strings.Trim(path, "/"), "/")
+}
+
+// isPlaceholder reports whether a token is a parameter slot.
 func isPlaceholder(s string) bool {
 	return len(s) > 2 && s[0] == '{' && s[len(s)-1] == '}'
 }

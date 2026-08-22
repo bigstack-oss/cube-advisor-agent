@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"sort"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -44,6 +45,31 @@ type Registry struct {
 
 	// run executes a command; swapped in tests so the suite never shells out.
 	run func(ctx context.Context, argv []string, maxBytes int) ([]byte, error)
+
+	// datacenter is the agent's own cluster identity, filled into a Get tool's
+	// {dc}. Empty until deployment wires it, which is why an unconfigured Get
+	// tool refuses rather than reading the wrong cluster.
+	datacenter string
+	// cubeCOS performs the authenticated read-only GET; nil-safe via a default
+	// that refuses, so a Get tool on an unconfigured agent is a clean refusal
+	// rather than a panic.
+	cubeCOS CubeCOSGetter
+}
+
+// CubeCOSGetter performs an authenticated read-only GET against the local
+// cube-cos-api and returns up to maxBytes of the response body. The
+// implementation owns the base URL, the node token and the TLS trust; none of
+// those ever reach this package, so none can reach the audit log.
+type CubeCOSGetter interface {
+	Get(ctx context.Context, path string, maxBytes int) ([]byte, error)
+}
+
+// notConfigured is the default getter: an agent that never had its cube-cos-api
+// client wired refuses a Get tool cleanly.
+type notConfigured struct{}
+
+func (notConfigured) Get(context.Context, string, int) ([]byte, error) {
+	return nil, fmt.Errorf("cube-cos-api access is not configured on this agent")
 }
 
 // New builds a registry from tools, refusing to start if any is malformed.
@@ -60,6 +86,7 @@ func New(tools []Tool, audit Auditor) (*Registry, error) {
 		audit:   audit,
 		timeout: defaultTimeout,
 		run:     runCommand,
+		cubeCOS: notConfigured{},
 	}
 	for _, t := range tools {
 		if err := t.validate(); err != nil {
@@ -81,6 +108,23 @@ func New(tools []Tool, audit Auditor) (*Registry, error) {
 // production, which is precisely what should not be.
 func (r *Registry) SetRunnerForTest(fn func(ctx context.Context, argv []string, maxBytes int) ([]byte, error)) {
 	r.run = fn
+}
+
+// ConfigureCubeCOS wires the agent's datacenter and its cube-cos-api client,
+// enabling the Get tools. Called once at agent startup from deployment
+// configuration; until then a Get tool refuses. The getter holds the base URL,
+// token and TLS trust — none of which enter this package.
+func (r *Registry) ConfigureCubeCOS(datacenter string, g CubeCOSGetter) {
+	r.datacenter = datacenter
+	if g != nil {
+		r.cubeCOS = g
+	}
+}
+
+// SetCubeCOSForTest is ConfigureCubeCOS's test-named twin, for suites in other
+// packages that inject a fake cube-cos-api.
+func (r *Registry) SetCubeCOSForTest(datacenter string, g CubeCOSGetter) {
+	r.ConfigureCubeCOS(datacenter, g)
 }
 
 // Names returns the registered tool names, sorted — what the agent advertises.
@@ -106,6 +150,10 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 			Reason: "no such tool", At: time.Now().UTC(),
 		})
 		return nil, fmt.Errorf("%w: %q", ErrUnknownTool, name)
+	}
+
+	if tool.Get != "" {
+		return r.callGet(ctx, tool, args)
 	}
 
 	argv, err := tool.resolve(args)
@@ -145,6 +193,91 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 	}
 	r.audit.RecordToolCall(rec)
 	return out, runErr
+}
+
+// callGet resolves a Get tool's path and fetches it from cube-cos-api.
+//
+// The path is the whole request: the method is GET (the getter offers nothing
+// else), {dc} is the agent's own datacenter, and every other segment is either
+// literal or an enum-checked model parameter. The audit records the resolved
+// path and never the token, which lives in the getter.
+func (r *Registry) callGet(ctx context.Context, tool Tool, args map[string]string) ([]byte, error) {
+	path, err := tool.resolvePath(args, r.datacenter)
+	if err != nil {
+		r.audit.RecordToolCall(ToolCall{
+			Tool: tool.Name, Args: args, Allowed: false,
+			Reason: err.Error(), At: time.Now().UTC(),
+		})
+		return nil, fmt.Errorf("%w: %v", ErrBadArgument, err)
+	}
+
+	max := tool.MaxOutputBytes
+	if max <= 0 {
+		max = defaultMaxOutputBytes
+	}
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+
+	started := time.Now()
+	out, runErr := r.cubeCOS.Get(ctx, path, max)
+	truncated := errors.Is(runErr, ErrOutputTruncated)
+	if truncated {
+		out = trimPartialRune(truncateAtRune(out, max))
+		out = append(out, fmt.Sprintf(truncationNotice, len(out))...)
+		runErr = nil
+	}
+	rec := ToolCall{
+		Tool: tool.Name, Args: args, Path: path, Allowed: true,
+		At: started.UTC(), Duration: time.Since(started), Bytes: len(out),
+		Truncated: truncated,
+	}
+	if runErr != nil {
+		rec.Reason = runErr.Error()
+	}
+	r.audit.RecordToolCall(rec)
+	return out, runErr
+}
+
+// resolvePath substitutes {dc} and the model parameters into a Get template.
+//
+// {dc} comes from the agent's config, never from args, so the SaaS cannot
+// redirect a read at another cluster. Every other placeholder is enum-checked
+// exactly like an argv parameter, and a substituted value may not contain a
+// path separator or a dot-dot segment — defence in depth, so even a careless
+// allowlist enum cannot compose a segment that escapes the intended resource.
+func (t Tool) resolvePath(args map[string]string, datacenter string) (string, error) {
+	for k := range args {
+		if _, ok := t.Params[k]; !ok {
+			return "", fmt.Errorf("unexpected argument %q", k)
+		}
+	}
+	segs := pathSegments(t.Get)
+	out := make([]string, 0, len(segs))
+	for _, seg := range segs {
+		if !isPlaceholder(seg) {
+			out = append(out, seg)
+			continue
+		}
+		if seg == dcPlaceholder {
+			if datacenter == "" {
+				return "", fmt.Errorf("cube-cos-api access is not configured on this agent")
+			}
+			out = append(out, datacenter)
+			continue
+		}
+		v, given := args[seg]
+		if !given {
+			return "", fmt.Errorf("missing argument %s", seg)
+		}
+		if !permitted(t.Params[seg], v) {
+			return "", fmt.Errorf("value for %s is not in the permitted set", seg)
+		}
+		if strings.ContainsAny(v, "/") || v == ".." {
+			return "", fmt.Errorf("value for %s is not a single path segment", seg)
+		}
+		out = append(out, v)
+	}
+	return "/" + strings.Join(out, "/"), nil
 }
 
 // truncateAtRune cuts b to at most limit bytes without splitting a rune.

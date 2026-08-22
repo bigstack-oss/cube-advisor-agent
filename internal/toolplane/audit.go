@@ -19,7 +19,8 @@ type ToolCall struct {
 	At       time.Time         `json:"at"`
 	Tool     string            `json:"tool"`
 	Args     map[string]string `json:"args,omitempty"`
-	Argv     []string          `json:"argv,omitempty"` // exactly what ran, empty when refused
+	Argv     []string          `json:"argv,omitempty"` // exactly what ran, empty when refused or a GET
+	Path     string            `json:"path,omitempty"` // resolved cube-cos-api path for a GET tool; never carries auth
 	Allowed  bool              `json:"allowed"`
 	Reason   string            `json:"reason,omitempty"`
 	Duration time.Duration     `json:"durationMs,omitempty"`
