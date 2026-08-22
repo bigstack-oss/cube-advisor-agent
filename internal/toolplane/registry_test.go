@@ -227,3 +227,70 @@ type closableBuffer struct{ b strings.Builder }
 func (c *closableBuffer) Write(p []byte) (int, error) { return c.b.Write(p) }
 func (c *closableBuffer) Close() error                { return nil }
 func (c *closableBuffer) String() string              { return c.b.String() }
+
+func TestPerToolTimeoutWinsOverTheDefault(t *testing.T) {
+	r, _, _ := newTestRegistry(t)
+
+	var got time.Duration
+	r.run = func(ctx context.Context, argv []string, maxBytes int) ([]byte, error) {
+		dl, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("call context carries no deadline")
+		}
+		got = time.Until(dl)
+		return []byte("ok"), nil
+	}
+
+	// cluster_check declares 100s; the deadline must reflect it, not the 60s
+	// default. Generous tolerance — this asserts which bound applied, not
+	// scheduler precision.
+	if _, err := r.Call(context.Background(), "cluster_check", nil); err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if got < 90*time.Second || got > 100*time.Second {
+		t.Errorf("cluster_check deadline ≈%s, want its declared 100s", got.Round(time.Second))
+	}
+
+	// cluster_health declares nothing; the registry default applies.
+	if _, err := r.Call(context.Background(), "cluster_health", map[string]string{"{group}": "Storage"}); err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if got < 50*time.Second || got > 60*time.Second {
+		t.Errorf("cluster_health deadline ≈%s, want the %s default", got.Round(time.Second), defaultTimeout)
+	}
+}
+
+func TestANegativeTimeoutCannotRegister(t *testing.T) {
+	_, err := New([]Tool{{
+		Name:     "broken",
+		Argv:     []string{"true"},
+		ReadOnly: true,
+		Timeout:  -time.Second,
+	}}, &recorder{})
+	if err == nil {
+		t.Fatal("a negative timeout registered")
+	}
+}
+
+// TestTimeoutLadderStaysOrdered pins the relationship the comments promise:
+// every tool's effective timeout sits under the server's per-call cap, which
+// sits under the SaaS's 120s channel deadline — so the timeout that fires is
+// always the one that can still write an honest result back.
+func TestTimeoutLadderStaysOrdered(t *testing.T) {
+	const serverCallCap = 110 * time.Second // internal/agent defaultCallTimeout
+	const saasDeadline = 120 * time.Second  // cube-ai-advisor cubecos callTimeout
+
+	if serverCallCap >= saasDeadline {
+		t.Errorf("server call cap %s must stay under the SaaS deadline %s", serverCallCap, saasDeadline)
+	}
+	for _, tool := range Allowlist {
+		eff := tool.Timeout
+		if eff == 0 {
+			eff = defaultTimeout
+		}
+		if eff >= serverCallCap {
+			t.Errorf("tool %s timeout %s reaches the server call cap %s; its own timeout would never fire",
+				tool.Name, eff, serverCallCap)
+		}
+	}
+}

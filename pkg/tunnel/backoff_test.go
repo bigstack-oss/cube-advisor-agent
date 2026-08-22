@@ -115,3 +115,43 @@ func TestDefaultBackoffIsSane(t *testing.T) {
 		t.Error("the default must jitter, or a SaaS restart becomes a thundering herd")
 	}
 }
+
+func TestFlapGuardEscalatesOnYoungDeaths(t *testing.T) {
+	g := &FlapGuard{
+		Threshold: 30 * time.Second,
+		Backoff:   Backoff{Min: 10 * time.Second, Max: 2 * time.Minute, Factor: 2},
+	}
+	want := []time.Duration{10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 2 * time.Minute, 2 * time.Minute}
+	for i, w := range want {
+		if got := g.SessionEnded(2 * time.Second); got != w {
+			t.Fatalf("flap %d: got %s, want %s", i, got, w)
+		}
+	}
+}
+
+func TestFlapGuardResetsAfterALongSession(t *testing.T) {
+	g := DefaultFlapGuard()
+	g.Backoff.Jitter = 0
+	if g.SessionEnded(time.Second) == 0 {
+		t.Fatal("young death should wait")
+	}
+	if d := g.SessionEnded(time.Hour); d != 0 {
+		t.Fatalf("a session that lived must not wait, got %s", d)
+	}
+	if got, want := g.SessionEnded(time.Second), g.Backoff.Min; got != want {
+		t.Fatalf("after a reset the ladder restarts: got %s, want %s", got, want)
+	}
+}
+
+func TestDefaultFlapGuardIsMuchSlowerThanTheConnectRamp(t *testing.T) {
+	g := DefaultFlapGuard()
+	if g.Backoff.Min < 10*time.Second {
+		t.Error("flap floor must be tens of seconds, or two agents sharing an identity fight at reconnect speed")
+	}
+	if g.Threshold <= 0 {
+		t.Error("a zero threshold disables the guard")
+	}
+	if g.Backoff.Jitter <= 0 {
+		t.Error("flap waits must jitter, or the two fighting agents stay synchronised")
+	}
+}

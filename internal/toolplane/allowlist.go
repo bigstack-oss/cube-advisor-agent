@@ -22,6 +22,7 @@ package toolplane
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Tool is one read-only operation the AI plane may invoke.
@@ -67,6 +68,13 @@ type Tool struct {
 	// registry default. A tool that can return a whole log file must not be
 	// able to exhaust the node's memory.
 	MaxOutputBytes int
+
+	// Timeout bounds one execution of this tool. Zero means the registry
+	// default. It must stay under the server's per-call cap (and, with margin,
+	// under the SaaS's channel deadline): the timeout that fires must be THIS
+	// one, so the model receives the executor's honest "tool timed out" result
+	// instead of a SaaS-side channel error it can only guess about.
+	Timeout time.Duration
 }
 
 // Allowlist is the complete set of tools the agent will serve.
@@ -79,6 +87,11 @@ var Allowlist = []Tool{
 		Description: "Cluster-wide health check: every service group and its status.",
 		Argv:        []string{"hex_cli", "-c", "cluster", "-c", "check"},
 		ReadOnly:    true,
+		// ~55s measured on a healthy 3-node cluster (cube-ai-advisor#52 lab
+		// run); the old 60s default left 8% headroom. 100s keeps this the
+		// first timeout to fire: under the server's 110s call cap, well under
+		// the SaaS's 120s channel deadline.
+		Timeout: 100 * time.Second,
 	},
 	{
 		Name:        "cluster_health",
@@ -119,6 +132,9 @@ var Allowlist = []Tool{
 		},
 		ReadOnly:       true,
 		MaxOutputBytes: 512 << 10,
+		// journalctl over a bounded line count is quick; a tail that takes
+		// longer than this is a node problem the timeout should surface.
+		Timeout: 30 * time.Second,
 	},
 	// cube-cos-api reads. GET only, structurally — the resolved path is the
 	// whole request, and {dc} is filled by the executor, so the SaaS chooses
@@ -156,6 +172,9 @@ func (t Tool) validate() error {
 	}
 	if !t.ReadOnly {
 		return fmt.Errorf("tool %q is not declared read-only; the AI plane has no write path", t.Name)
+	}
+	if t.Timeout < 0 {
+		return fmt.Errorf("tool %q has a negative timeout", t.Name)
 	}
 	hasArgv, hasGet := len(t.Argv) > 0, t.Get != ""
 	if hasArgv == hasGet {

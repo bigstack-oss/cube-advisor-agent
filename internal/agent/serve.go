@@ -31,7 +31,12 @@ type Server struct {
 	CallTimeout time.Duration
 }
 
-const defaultCallTimeout = 90 * time.Second
+// defaultCallTimeout is one rung of the timeout ladder: it must sit above the
+// largest tool timeout in the registry (so the tool's own timeout fires first
+// and the model gets an honest "tool timed out" result, not a dead channel)
+// and below the SaaS's channel deadline (120s), for the same reason one level
+// up. Today: tools ≤100s < this 110s < SaaS 120s.
+const defaultCallTimeout = 110 * time.Second
 
 // Serve accepts channels until the session ends or ctx is cancelled.
 //

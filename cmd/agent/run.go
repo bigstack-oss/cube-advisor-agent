@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/bigstack-oss/cube-advisor-agent/internal/agent"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
@@ -97,22 +98,36 @@ func runCmd(args []string) int {
 
 	srv := &agent.Server{Tools: reg}
 	backoff := tunnel.DefaultBackoff()
+	guard := tunnel.DefaultFlapGuard()
 	log.Printf("agent %s: serving %d tools for %s via %s",
 		version, len(reg.Names()), id.ClusterID, *addr)
 
 	// Serve until told to stop. Each session ending — network flap, SaaS
 	// restart, supersession by a newer agent — is a reason to reconnect, not
 	// to exit: an air-gapped operator is not watching this process.
+	//
+	// The guard is what keeps two agents sharing one identity from fighting at
+	// reconnect speed: connect succeeds instantly, the SaaS supersedes the
+	// other's session, it reconnects and supersedes ours, forever. Sessions
+	// that die young back off hard; sessions that live cost nothing.
 	for ctx.Err() == nil {
 		sess, err := backoff.Reconnect(ctx, connect, nil)
 		if err != nil {
 			break // only a cancelled context ends Reconnect
 		}
 		log.Printf("agent: connected to %s", *addr)
+		started := time.Now()
 		if err := srv.Serve(ctx, sess); err != nil {
 			log.Printf("agent: session ended: %v", err)
 		}
 		_ = sess.Close()
+		if d := guard.SessionEnded(time.Since(started)); d > 0 {
+			log.Printf("agent: session died young — waiting %s before reconnecting (another agent may hold this identity)",
+				d.Round(time.Second))
+			if tunnel.Sleep(ctx, d) != nil {
+				break
+			}
+		}
 	}
 	log.Printf("agent: stopping")
 	return exitOK

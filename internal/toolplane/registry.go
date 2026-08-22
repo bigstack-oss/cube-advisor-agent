@@ -31,6 +31,13 @@ var ErrOutputTruncated = errors.New("toolplane: output truncated")
 const truncationNotice = "\n[truncated after %d bytes by the executor's output cap]"
 
 // Defaults bounding a single call. A tool call is a diagnostic read, not a job.
+//
+// The timeout ladder matters more than any single value: a tool's own timeout
+// (per-tool or this default) < the server's per-call cap < the SaaS's channel
+// deadline. The innermost timeout must fire first, because it is the one that
+// produces an honest "tool timed out" result the model can read — every layer
+// above it can only report a dead channel. Today the rungs are ≤100s here,
+// 110s in internal/agent, 120s SaaS-side.
 const (
 	defaultMaxOutputBytes = 256 << 10
 	defaultTimeout        = 60 * time.Second
@@ -127,6 +134,17 @@ func (r *Registry) SetCubeCOSForTest(datacenter string, g CubeCOSGetter) {
 	r.ConfigureCubeCOS(datacenter, g)
 }
 
+// timeoutFor returns the bound for one execution of tool: its own declared
+// timeout, or the registry default. Per-tool wins — cluster_check legitimately
+// needs longer than a journal tail, and one shared number would either starve
+// the slow tool or slacken every fast one.
+func (r *Registry) timeoutFor(tool Tool) time.Duration {
+	if tool.Timeout > 0 {
+		return tool.Timeout
+	}
+	return r.timeout
+}
+
 // Names returns the registered tool names, sorted — what the agent advertises.
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.tools))
@@ -169,7 +187,7 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 	if max <= 0 {
 		max = defaultMaxOutputBytes
 	}
-	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	ctx, cancel := context.WithTimeout(ctx, r.timeoutFor(tool))
 	defer cancel()
 
 	started := time.Now()
@@ -215,7 +233,7 @@ func (r *Registry) callGet(ctx context.Context, tool Tool, args map[string]strin
 	if max <= 0 {
 		max = defaultMaxOutputBytes
 	}
-	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	ctx, cancel := context.WithTimeout(ctx, r.timeoutFor(tool))
 	defer cancel()
 
 	started := time.Now()
