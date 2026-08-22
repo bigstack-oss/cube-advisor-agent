@@ -2,6 +2,7 @@ package toolplane
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -33,8 +34,8 @@ func TestExecBoundsOutput(t *testing.T) {
 	if len(out) != max {
 		t.Errorf("output = %d bytes, want it capped at %d", len(out), max)
 	}
-	if err == nil || !strings.Contains(err.Error(), "truncated") {
-		t.Errorf("truncation should be reported, got err = %v", err)
+	if !errors.Is(err, ErrOutputTruncated) {
+		t.Errorf("truncation should be reported as ErrOutputTruncated, got err = %v", err)
 	}
 }
 

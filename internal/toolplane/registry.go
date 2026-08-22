@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sort"
 	"time"
+	"unicode/utf8"
 )
 
 // Errors a caller may distinguish. They are deliberately coarse: the SaaS is
@@ -17,6 +18,16 @@ var (
 	ErrUnknownTool = errors.New("toolplane: no such tool")
 	ErrBadArgument = errors.New("toolplane: argument not permitted")
 )
+
+// ErrOutputTruncated is how a runner reports that a command emitted more than
+// the cap. Call converts it into a successful, marked result rather than a
+// failure: the first half-megabyte of a log is evidence, silence is not.
+var ErrOutputTruncated = errors.New("toolplane: output truncated")
+
+// truncationNotice is appended to a capped result so the model reports the cut
+// instead of hallucinating the tail. Wording mirrors the SaaS-side budget
+// marker; there is no trajectory here, so it claims none.
+const truncationNotice = "\n[truncated after %d bytes by the executor's output cap]"
 
 // Defaults bounding a single call. A tool call is a diagnostic read, not a job.
 const (
@@ -115,15 +126,50 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 
 	started := time.Now()
 	out, runErr := r.run(ctx, argv, max)
+	truncated := errors.Is(runErr, ErrOutputTruncated)
+	if truncated {
+		// A capped result is data, not a failure. The runner cut at a byte
+		// count, which may have split a rune; back off to a boundary so the
+		// marker never follows half a character, and say where the cut fell.
+		out = trimPartialRune(truncateAtRune(out, max))
+		out = append(out, fmt.Sprintf(truncationNotice, len(out))...)
+		runErr = nil
+	}
 	rec := ToolCall{
 		Tool: name, Args: args, Argv: argv, Allowed: true,
 		At: started.UTC(), Duration: time.Since(started), Bytes: len(out),
+		Truncated: truncated,
 	}
 	if runErr != nil {
 		rec.Reason = runErr.Error()
 	}
 	r.audit.RecordToolCall(rec)
 	return out, runErr
+}
+
+// truncateAtRune cuts b to at most limit bytes without splitting a rune.
+func truncateAtRune(b []byte, limit int) []byte {
+	if len(b) <= limit {
+		return b
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(b[cut]) {
+		cut--
+	}
+	return b[:cut]
+}
+
+// trimPartialRune drops an incomplete trailing rune left by a byte-level cut.
+// At most UTFMax-1 bytes go: bounded, so a genuinely binary tail is not eaten.
+func trimPartialRune(b []byte) []byte {
+	for i := 0; i < utf8.UTFMax-1 && len(b) > 0; i++ {
+		r, size := utf8.DecodeLastRune(b)
+		if r != utf8.RuneError || size != 1 {
+			return b
+		}
+		b = b[:len(b)-1]
+	}
+	return b
 }
 
 // resolve substitutes declared parameters into the tool's argv.
@@ -197,7 +243,7 @@ func runCommand(ctx context.Context, argv []string, maxBytes int) ([]byte, error
 		return out, waitErr
 	}
 	if truncated {
-		return out, fmt.Errorf("toolplane: output truncated at %d bytes", maxBytes)
+		return out, fmt.Errorf("%w at %d bytes", ErrOutputTruncated, maxBytes)
 	}
 	return out, nil
 }
