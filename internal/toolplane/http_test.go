@@ -2,8 +2,10 @@ package toolplane
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A Get tool that takes no model input: the datacenter in the path is the
@@ -36,10 +38,17 @@ type fakeCubeCOS struct {
 	lastPath string
 	body     string
 	err      error
+	// block, if set, makes Get wait for ctx to end instead of returning
+	// immediately — how a real HTTP client behaves against a slow endpoint.
+	block bool
 }
 
-func (f *fakeCubeCOS) Get(_ context.Context, path string, _ int) ([]byte, error) {
+func (f *fakeCubeCOS) Get(ctx context.Context, path string, _ int) ([]byte, error) {
 	f.lastPath = path
+	if f.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -192,6 +201,28 @@ func TestTheDatacenterPlaceholderIsNotAnArgumentEvenByItsRealKey(t *testing.T) {
 	}
 	if fake.lastPath == "/api/v1/datacenters/evil/healths" {
 		t.Fatal("a caller-supplied datacenter reached the path")
+	}
+}
+
+// A Get tool that runs past its own timeout must report the same
+// distinguishable ErrToolTimedOut as a command tool — see registry_test.go's
+// TestATimedOutToolReturnsADistinguishableResult for the argv-side case.
+func TestAGetToolPastItsDeadlineIsADistinguishableTimeout(t *testing.T) {
+	tool := healthsTool()
+	tool.Timeout = 20 * time.Millisecond
+	rec := &recorder{}
+	r, err := New([]Tool{tool}, rec)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r.SetCubeCOSForTest("sky-dc", &fakeCubeCOS{block: true})
+
+	_, err = r.Call(context.Background(), "cube_cos_healths", nil)
+	if !errors.Is(err, ErrToolTimedOut) {
+		t.Fatalf("err = %v, want ErrToolTimedOut", err)
+	}
+	if !strings.Contains(err.Error(), "20ms") {
+		t.Errorf("error should name the limit that fired: %v", err)
 	}
 }
 

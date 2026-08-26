@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -257,6 +258,53 @@ func TestPerToolTimeoutWinsOverTheDefault(t *testing.T) {
 	}
 	if got < 50*time.Second || got > 60*time.Second {
 		t.Errorf("cluster_health deadline ≈%s, want the %s default", got.Round(time.Second), defaultTimeout)
+	}
+}
+
+// TestATimedOutToolReturnsADistinguishableResult proves the fix for
+// bigstack-oss/cube-advisor-agent#20: a killed process must not report the
+// same "signal: killed" shape as a real crash. Both the caller's error and
+// the audit log's reason must name the timeout, not the kill signal.
+func TestATimedOutToolReturnsADistinguishableResult(t *testing.T) {
+	rec := &recorder{}
+	r, err := New([]Tool{{
+		Name: "slow", Argv: []string{"true"}, ReadOnly: true,
+		Timeout: 20 * time.Millisecond,
+	}}, rec)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r.run = func(ctx context.Context, argv []string, maxBytes int) ([]byte, error) {
+		<-ctx.Done()
+		return nil, fmt.Errorf("signal: killed")
+	}
+
+	_, err = r.Call(context.Background(), "slow", nil)
+	if !errors.Is(err, ErrToolTimedOut) {
+		t.Fatalf("err = %v, want ErrToolTimedOut", err)
+	}
+	if !strings.Contains(err.Error(), "20ms") {
+		t.Errorf("error should name the limit that fired: %v", err)
+	}
+	if got := rec.calls[0].Reason; strings.Contains(got, "signal: killed") {
+		t.Errorf("audit reason still shows the raw kill signal: %q", got)
+	}
+}
+
+// A failure that is not a timeout — the process ran to completion and simply
+// exited badly — must not be relabelled. Only ctx's own deadline earns the
+// distinguishable message.
+func TestAnOrdinaryFailureIsNotMislabelledATimeout(t *testing.T) {
+	r, rec, _ := newTestRegistry(t)
+	r.run = func(ctx context.Context, argv []string, maxBytes int) ([]byte, error) {
+		return nil, fmt.Errorf("exit status 1")
+	}
+	_, err := r.Call(context.Background(), "cluster_check", nil)
+	if errors.Is(err, ErrToolTimedOut) {
+		t.Fatalf("an ordinary failure was reported as a timeout: %v", err)
+	}
+	if rec.calls[0].Reason != "exit status 1" {
+		t.Errorf("audit reason = %q, want the original failure preserved", rec.calls[0].Reason)
 	}
 }
 

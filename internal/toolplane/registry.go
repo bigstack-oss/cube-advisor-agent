@@ -20,6 +20,12 @@ var (
 	ErrBadArgument = errors.New("toolplane: argument not permitted")
 )
 
+// ErrToolTimedOut distinguishes a tool that ran out of time from one that
+// crashed. Without it, a killed process reports "signal: killed" — the same
+// shape as a real failure — and neither the audit log nor an operator can
+// tell a slow cluster from a broken one.
+var ErrToolTimedOut = errors.New("toolplane: tool exceeded its time limit")
+
 // ErrOutputTruncated is how a runner reports that a command emitted more than
 // the cap. Call converts it into a successful, marked result rather than a
 // failure: the first half-megabyte of a log is evidence, silence is not.
@@ -145,6 +151,18 @@ func (r *Registry) timeoutFor(tool Tool) time.Duration {
 	return r.timeout
 }
 
+// asTimeout replaces err with a distinguishable ErrToolTimedOut when ctx's own
+// deadline is what ended the call — the same failure a killed process reports
+// as an opaque "signal: killed". Checking ctx.Err() rather than the error's
+// text works regardless of what the runner or the cube-cos-api client
+// happened to return for a killed/cancelled call.
+func asTimeout(ctx context.Context, name string, timeout time.Duration, err error) error {
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("%w: %q ran past its %s limit", ErrToolTimedOut, name, timeout)
+	}
+	return err
+}
+
 // Names returns the registered tool names, sorted — what the agent advertises.
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.tools))
@@ -187,11 +205,13 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 	if max <= 0 {
 		max = defaultMaxOutputBytes
 	}
-	ctx, cancel := context.WithTimeout(ctx, r.timeoutFor(tool))
+	timeout := r.timeoutFor(tool)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	started := time.Now()
 	out, runErr := r.run(ctx, argv, max)
+	runErr = asTimeout(ctx, name, timeout, runErr)
 	truncated := errors.Is(runErr, ErrOutputTruncated)
 	if truncated {
 		// A capped result is data, not a failure. The runner cut at a byte
@@ -233,11 +253,13 @@ func (r *Registry) callGet(ctx context.Context, tool Tool, args map[string]strin
 	if max <= 0 {
 		max = defaultMaxOutputBytes
 	}
-	ctx, cancel := context.WithTimeout(ctx, r.timeoutFor(tool))
+	timeout := r.timeoutFor(tool)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	started := time.Now()
 	out, runErr := r.cubeCOS.Get(ctx, path, max)
+	runErr = asTimeout(ctx, tool.Name, timeout, runErr)
 	truncated := errors.Is(runErr, ErrOutputTruncated)
 	if truncated {
 		out = trimPartialRune(truncateAtRune(out, max))
