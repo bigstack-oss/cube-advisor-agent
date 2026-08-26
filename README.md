@@ -75,6 +75,15 @@ The verifier itself is **not** in this repository, and must not be: a verifier
 that shares a build pipeline with the artifact it verifies means one compromised
 pipeline defeats both.
 
+## Running as a service
+
+`contrib/systemd/cube-advisor-agent.service` runs `cube-advisor-agent run` with
+no arguments — enrolment persists the tunnel address, so the unit does not need
+one — and restarts it on failure. The OS image installs the unit but enables it
+only after `enroll` succeeds; an un-enrolled node has nothing to connect with.
+The agent already reconnects with backoff on its own, so the unit's only job is
+to keep the process alive.
+
 ## Status
 
 Early, but no longer only a protocol. Built and tested: the wire protocol and

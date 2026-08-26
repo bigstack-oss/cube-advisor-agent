@@ -1,10 +1,26 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
+	"io"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
+	"github.com/bigstack-oss/cube-advisor-agent/pkg/enrollproto"
 )
 
 // The token-reading rules are worth testing directly: they are the difference
@@ -104,6 +120,130 @@ func TestExitCodesAreDistinct(t *testing.T) {
 			t.Errorf("%s and %s share exit code %d; an installer cannot branch on them", name, prev, code)
 		}
 		seen[code] = name
+	}
+}
+
+// --- tunnel address persistence (bigstack-oss/cube-advisor-agent#19) -----
+
+func TestDeriveTunnelAddrUsesTheServerHostOnTheDefaultPort(t *testing.T) {
+	got, err := deriveTunnelAddr("https://advisor.bigstack.co")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "advisor.bigstack.co:8443" {
+		t.Errorf("got %q, want the -server host on the tunnel default port", got)
+	}
+}
+
+// The enrollment service's own port must not leak into the derived tunnel
+// address — they are two different listeners, which is the whole reason an
+// operator whose SaaS differs needs -tunnel.
+func TestDeriveTunnelAddrIgnoresTheEnrollmentPort(t *testing.T) {
+	got, err := deriveTunnelAddr("https://advisor.bigstack.co:9443/enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "advisor.bigstack.co:8443" {
+		t.Errorf("got %q, want the enrollment port replaced by the tunnel default", got)
+	}
+}
+
+func TestDeriveTunnelAddrRejectsAServerWithNoHost(t *testing.T) {
+	if _, err := deriveTunnelAddr(""); err == nil {
+		t.Error("a -server value with no host derived a tunnel address")
+	}
+}
+
+// fakeEnrollServer plays a minimal SaaS enrollment endpoint: sign whatever CSR
+// the agent sends with a throwaway key. Nothing in Enroll validates the
+// signer's chain — it only checks the returned certificate matches the private
+// key the agent generated — so the signer need not be a consistent CA.
+func fakeEnrollServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("reading enroll request: %v", err)
+		}
+		var req enrollproto.Request
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("bad enroll request: %v", err)
+		}
+		blk, _ := pem.Decode([]byte(req.CSR))
+		if blk == nil {
+			t.Fatal("enroll request carried no CSR")
+		}
+		csr, err := x509.ParseCertificateRequest(blk.Bytes)
+		if err != nil {
+			t.Fatalf("bad CSR: %v", err)
+		}
+		pub, ok := csr.PublicKey.(*ecdsa.PublicKey)
+		if !ok {
+			t.Fatal("CSR did not carry an ECDSA public key")
+		}
+		signer, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(time.Now().UnixNano()),
+			Subject:      pkix.Name{CommonName: csr.Subject.CommonName},
+			NotBefore:    time.Now().Add(-time.Minute),
+			NotAfter:     time.Now().Add(time.Hour),
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, signer)
+		if err != nil {
+			t.Fatalf("sign: %v", err)
+		}
+		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+		_ = json.NewEncoder(w).Encode(enrollproto.Response{Certificate: string(certPEM)})
+	}))
+}
+
+// The end-to-end proof for issue #19: a successful enrolment leaves behind a
+// tunnel address run can use with no argument, derived from -server when the
+// operator did not say otherwise.
+func TestEnrollPersistsTheDerivedTunnelAddress(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeEnrollServer(t)
+	defer srv.Close()
+
+	code := enrollCmd([]string{"-server", srv.URL, "-cluster", "c", "-dir", dir, "-token", "t"})
+	if code != exitOK {
+		t.Fatalf("enrollCmd exit = %d", code)
+	}
+	got, err := identity.LoadServer(dir)
+	if err != nil {
+		t.Fatalf("LoadServer: %v", err)
+	}
+	u, _ := url.Parse(srv.URL)
+	want := u.Hostname() + ":8443"
+	if got != want {
+		t.Errorf("persisted tunnel address = %q, want %q (derived from -server)", got, want)
+	}
+}
+
+// An explicit -tunnel must win over the derivation.
+func TestEnrollPersistsAnExplicitTunnelAddress(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeEnrollServer(t)
+	defer srv.Close()
+
+	code := enrollCmd([]string{
+		"-server", srv.URL, "-cluster", "c", "-dir", dir, "-token", "t",
+		"-tunnel", "tunnel.example:9443",
+	})
+	if code != exitOK {
+		t.Fatalf("enrollCmd exit = %d", code)
+	}
+	got, err := identity.LoadServer(dir)
+	if err != nil {
+		t.Fatalf("LoadServer: %v", err)
+	}
+	if got != "tunnel.example:9443" {
+		t.Errorf("persisted tunnel address = %q, want the explicit -tunnel value", got)
 	}
 }
 

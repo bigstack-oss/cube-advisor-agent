@@ -12,12 +12,19 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
 )
+
+// defaultTunnelPort is the SaaS tunnel listener's chart default. It is what
+// -tunnel derives from -server's host when the operator does not say
+// otherwise; a SaaS whose tunnel listens elsewhere requires -tunnel explicitly.
+const defaultTunnelPort = "8443"
 
 // Set at build time by mkrelease.
 var (
@@ -61,11 +68,28 @@ func main() {
 func usage() {
 	fmt.Fprintf(os.Stderr, `cube-advisor-agent %s
 
-  enroll  -server <url> [-token <t> | -token-file <path> | -token-stdin]
-  run     -server <host:port> [-dir <path>] [-audit <path>]
+  enroll  -server <url> [-token <t> | -token-file <path> | -token-stdin] [-tunnel <host:port>]
+  run     [-server <host:port>] [-dir <path>] [-audit <path>]
   status
   version
 `, version)
+}
+
+// deriveTunnelAddr computes the tunnel address run should persist-and-use when
+// the operator did not pass -tunnel: serverURL's host, on defaultTunnelPort.
+// That default is the SaaS chart's tunnel listener port, not the enrollment
+// service's — the two can differ, which is exactly why -tunnel exists for an
+// operator whose SaaS tunnel listens elsewhere.
+func deriveTunnelAddr(serverURL string) (string, error) {
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		return "", fmt.Errorf("parsing -server to derive a tunnel address: %w", err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("-server %q has no host to derive a tunnel address from; pass -tunnel", serverURL)
+	}
+	return net.JoinHostPort(host, defaultTunnelPort), nil
 }
 
 func enrollCmd(args []string) int {
@@ -77,6 +101,8 @@ func enrollCmd(args []string) int {
 	tokenFile := fs.String("token-file", "", "read the pairing token from a file")
 	tokenStdin := fs.Bool("token-stdin", false, "read the pairing token from stdin")
 	force := fs.Bool("force", false, "replace an existing identity")
+	tunnel := fs.String("tunnel", "",
+		"SaaS tunnel address to persist for `run`, host:port (default: -server's host on port "+defaultTunnelPort+")")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -128,6 +154,22 @@ func enrollCmd(args []string) int {
 			return exitUnreachable
 		}
 		return exitFailed
+	}
+
+	// Persist the tunnel address so `run` needs no operator argument
+	// afterwards (bigstack-oss/cube-advisor-agent#19). This is a convenience
+	// on top of an already-successful enrolment, not part of it: a failure
+	// here is reported but does not undo the identity just saved, since an
+	// operator can still pass -server to `run` explicitly.
+	tunnelAddr := *tunnel
+	if tunnelAddr == "" {
+		tunnelAddr, err = deriveTunnelAddr(*server)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "enroll: enrolled, but could not determine a tunnel address to persist: %v\n", err)
+		fmt.Fprintln(os.Stderr, "enroll: pass -server host:port to `run` explicitly, or -force -tunnel host:port to re-enroll")
+	} else if err := identity.SaveServer(*dir, tunnelAddr); err != nil {
+		fmt.Fprintf(os.Stderr, "enroll: enrolled, but could not persist the tunnel address: %v\n", err)
 	}
 
 	fp, err := id.Fingerprint()

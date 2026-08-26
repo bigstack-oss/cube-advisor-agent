@@ -150,6 +150,76 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+// --- tunnel address persistence (bigstack-oss/cube-advisor-agent#19) -----
+
+func TestSaveServerLoadServerRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveServer(dir, "advisor.bigstack.co:8443"); err != nil {
+		t.Fatalf("SaveServer: %v", err)
+	}
+	got, err := LoadServer(dir)
+	if err != nil {
+		t.Fatalf("LoadServer: %v", err)
+	}
+	if got != "advisor.bigstack.co:8443" {
+		t.Errorf("LoadServer = %q, want the address SaveServer wrote", got)
+	}
+	info, err := os.Stat(filepath.Join(dir, serverFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Errorf("server file mode = %04o, want 0644 — it is not secret", perm)
+	}
+}
+
+// A node that has never persisted a tunnel address (never enrolled, or
+// enrolled before this feature existed) must not fail to load — run needs to
+// fall back cleanly to requiring -server.
+func TestLoadServerWithNothingPersistedIsNotAnError(t *testing.T) {
+	got, err := LoadServer(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadServer on an empty dir returned an error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("LoadServer = %q, want empty", got)
+	}
+}
+
+func TestSaveServerRefusesAnEmptyAddress(t *testing.T) {
+	if err := SaveServer(t.TempDir(), ""); err == nil {
+		t.Error("an empty tunnel address was persisted")
+	}
+}
+
+// Save (the identity's own method) must not gain a dependency on the tunnel
+// address file: the two are written independently.
+func TestSaveDoesNotTouchTheServerFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := freshIdentity(t).Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, serverFileName)); !os.IsNotExist(err) {
+		t.Errorf("Save wrote a server file unasked: err = %v", err)
+	}
+}
+
+// Remove (used before a forced re-enrolment) clears the persisted tunnel
+// address along with the rest of the identity, so a re-enrol that fails
+// partway does not leave a stale address behind a dead identity.
+func TestRemoveClearsThePersistedServerAddress(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveServer(dir, "advisor.bigstack.co:8443"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(dir); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, serverFileName)); !os.IsNotExist(err) {
+		t.Errorf("server file survived Remove: err = %v", err)
+	}
+}
+
 // --- fingerprint ---------------------------------------------------------
 
 // The fingerprint is what an operator compares on two screens, so it must

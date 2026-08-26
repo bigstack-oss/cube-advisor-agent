@@ -28,15 +28,18 @@ import (
 // HTTPS.
 func runCmd(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	addr := fs.String("server", "", "SaaS tunnel address, host:port")
+	addr := fs.String("server", "",
+		"SaaS tunnel address, host:port (default: the address enrolment persisted)")
 	dir := fs.String("dir", identity.DefaultDir, "where the identity is stored")
 	auditPath := fs.String("audit", "/var/log/cube-advisor-agent/toolcalls.log",
 		"append-only audit log of every tool call served")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if *addr == "" {
-		fmt.Fprintln(os.Stderr, "run: -server is required")
+
+	serverAddr, err := resolveServerAddr(*addr, *dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return exitUsage
 	}
 
@@ -50,7 +53,7 @@ func runCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return exitFailed
 	}
-	host, _, err := net.SplitHostPort(*addr)
+	host, _, err := net.SplitHostPort(serverAddr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: -server must be host:port: %v\n", err)
 		return exitUsage
@@ -81,7 +84,7 @@ func runCmd(args []string) int {
 		AgentVersion:    version,
 		ProtocolVersion: tunnelproto.Version,
 	}
-	url := "wss://" + *addr + tunnel.WSPath
+	url := "wss://" + serverAddr + tunnel.WSPath
 	httpClient := tunnel.NewTLSClient(tlsCfg)
 	connect := func(ctx context.Context) (*tunnel.Session, error) {
 		conn, err := tunnel.DialWS(ctx, url, nil, httpClient)
@@ -100,7 +103,7 @@ func runCmd(args []string) int {
 	backoff := tunnel.DefaultBackoff()
 	guard := tunnel.DefaultFlapGuard()
 	log.Printf("agent %s: serving %d tools for %s via %s",
-		version, len(reg.Names()), id.ClusterID, *addr)
+		version, len(reg.Names()), id.ClusterID, serverAddr)
 
 	// Serve until told to stop. Each session ending — network flap, SaaS
 	// restart, supersession by a newer agent — is a reason to reconnect, not
@@ -115,7 +118,7 @@ func runCmd(args []string) int {
 		if err != nil {
 			break // only a cancelled context ends Reconnect
 		}
-		log.Printf("agent: connected to %s", *addr)
+		log.Printf("agent: connected to %s", serverAddr)
 		started := time.Now()
 		if err := srv.Serve(ctx, sess); err != nil {
 			log.Printf("agent: session ended: %v", err)
@@ -131,4 +134,23 @@ func runCmd(args []string) int {
 	}
 	log.Printf("agent: stopping")
 	return exitOK
+}
+
+// resolveServerAddr picks the tunnel address to dial: an explicit -server
+// always wins (bigstack-oss/cube-advisor-agent#19's whole point is that an
+// operator need not pass it, not that they cannot), otherwise the address
+// enrolment persisted. Neither present is a distinct, actionable refusal
+// rather than a confusing dial failure against an empty address.
+func resolveServerAddr(explicit, dir string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	persisted, err := identity.LoadServer(dir)
+	if err != nil {
+		return "", fmt.Errorf("reading the persisted tunnel address: %w", err)
+	}
+	if persisted == "" {
+		return "", fmt.Errorf("no tunnel address: enrol first, or pass -server host:port")
+	}
+	return persisted, nil
 }

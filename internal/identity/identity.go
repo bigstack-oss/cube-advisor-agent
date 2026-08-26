@@ -20,14 +20,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Default locations on a CubeCOS node.
 const (
-	DefaultDir  = "/etc/cube/advisor-agent"
-	keyFileName = "agent.key"
-	crtFileName = "agent.crt"
-	caFileName  = "enrollment-ca.crt"
+	DefaultDir     = "/etc/cube/advisor-agent"
+	keyFileName    = "agent.key"
+	crtFileName    = "agent.crt"
+	caFileName     = "enrollment-ca.crt"
+	serverFileName = "server"
 )
 
 // keyFileMode is the only mode a private key may have. Enforced rather than
@@ -176,6 +178,42 @@ func (i *Identity) commonName() (string, error) {
 	return crt.Subject.CommonName, nil
 }
 
+// SaveServer persists the tunnel address enrolment resolved, so a later `run`
+// needs no operator argument. Mode 0644, unlike the key: this is not secret,
+// it is the same host:port an operator could read straight off the SaaS.
+//
+// It is a separate write from Save rather than a field on it, so an existing
+// caller of Save is unaffected and a failure to persist the address (a
+// read-only /etc, say) never looks like a failure to persist the identity.
+func SaveServer(dir, addr string) error {
+	if addr == "" {
+		return fmt.Errorf("identity: refusing to persist an empty tunnel address")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("identity: create dir: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, serverFileName), []byte(addr), 0o644); err != nil {
+		return fmt.Errorf("identity: write server address: %w", err)
+	}
+	return nil
+}
+
+// LoadServer reads the tunnel address SaveServer persisted. A missing file is
+// not an error — it just means enrolment predates this feature, or never
+// resolved an address — so the caller (run) can fall back to requiring
+// -server explicitly instead of failing to load an identity that is otherwise
+// fine.
+func LoadServer(dir string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, serverFileName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("identity: read server address: %w", err)
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
 // Exists reports whether dir already holds a key and certificate. Enrollment
 // consults this so a second run cannot silently replace a working identity —
 // re-enrolling is a deliberate act, not an accident of running a command twice.
@@ -223,7 +261,7 @@ func (i *Identity) TLSConfig(serverName string) (*tls.Config, error) {
 // something Save does implicitly, because silently replacing an identity is how
 // a cluster loses the certificate the SaaS is currently accepting.
 func Remove(dir string) error {
-	for _, name := range []string{keyFileName, crtFileName, caFileName} {
+	for _, name := range []string{keyFileName, crtFileName, caFileName, serverFileName} {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("identity: removing %s: %w", name, err)
 		}
