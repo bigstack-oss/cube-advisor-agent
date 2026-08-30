@@ -43,13 +43,39 @@ func TestShippedAllowlistRegisters(t *testing.T) {
 func TestAToolThatIsNotReadOnlyCannotRegister(t *testing.T) {
 	_, err := New([]Tool{{
 		Name: "restart_thing", Argv: []string{"systemctl", "restart", "thing"},
-		ReadOnly: false,
+		Impact: ImpactMutate,
 	}}, &recorder{})
 	if err == nil {
-		t.Fatal("a tool not declared read-only was registered")
+		t.Fatal("a tool declaring a mutating impact was registered")
 	}
-	if !strings.Contains(err.Error(), "read-only") {
+	if !strings.Contains(err.Error(), "reads only") {
 		t.Errorf("error should say why: %v", err)
+	}
+}
+
+// A probe-class tool is not served either: this executor has no probe plane
+// yet, and the class exists here so that fact is checked rather than assumed.
+func TestAScratchToolCannotRegisterYet(t *testing.T) {
+	_, err := New([]Tool{{
+		Name: "probe_fio_volume", Argv: []string{"fio", "--name", "x"},
+		Impact: ImpactScratch,
+	}}, &recorder{})
+	if err == nil {
+		t.Fatal("a load-generating tool was registered")
+	}
+}
+
+// Forgetting the field must not be a way in. The boolean this replaced failed
+// closed on its zero value, and so does the enum.
+func TestAToolThatDeclaresNoImpactCannotRegister(t *testing.T) {
+	_, err := New([]Tool{{
+		Name: "undeclared", Argv: []string{"hex_cli", "-c", "cluster", "-c", "check"},
+	}}, &recorder{})
+	if err == nil {
+		t.Fatal("a tool that declared no impact was registered")
+	}
+	if !strings.Contains(err.Error(), "undeclared") {
+		t.Errorf("error should name the undeclared impact: %v", err)
 	}
 }
 
@@ -61,22 +87,22 @@ func TestMalformedToolsAreRefusedAtRegistration(t *testing.T) {
 		tool Tool
 	}{
 		{"undeclared placeholder", Tool{
-			Name: "x", Argv: []string{"hex_cli", "{group}"}, ReadOnly: true,
+			Name: "x", Argv: []string{"hex_cli", "{group}"}, Impact: ImpactRead,
 		}},
 		{"declared but unused", Tool{
-			Name: "x", Argv: []string{"hex_cli"}, ReadOnly: true,
+			Name: "x", Argv: []string{"hex_cli"}, Impact: ImpactRead,
 			Params: map[string][]string{"{group}": {"Storage"}},
 		}},
 		{"parameter with no permitted values", Tool{
-			Name: "x", Argv: []string{"hex_cli", "{group}"}, ReadOnly: true,
+			Name: "x", Argv: []string{"hex_cli", "{group}"}, Impact: ImpactRead,
 			Params: map[string][]string{"{group}": {}},
 		}},
 		{"parameterised executable", Tool{
-			Name: "x", Argv: []string{"{prog}", "check"}, ReadOnly: true,
+			Name: "x", Argv: []string{"{prog}", "check"}, Impact: ImpactRead,
 			Params: map[string][]string{"{prog}": {"hex_cli"}},
 		}},
-		{"empty argv", Tool{Name: "x", ReadOnly: true}},
-		{"no name", Tool{Argv: []string{"hex_cli"}, ReadOnly: true}},
+		{"empty argv", Tool{Name: "x", Impact: ImpactRead}},
+		{"no name", Tool{Argv: []string{"hex_cli"}, Impact: ImpactRead}},
 	}
 	for _, c := range cases {
 		if _, err := New([]Tool{c.tool}, &recorder{}); err == nil {
@@ -268,7 +294,7 @@ func TestPerToolTimeoutWinsOverTheDefault(t *testing.T) {
 func TestATimedOutToolReturnsADistinguishableResult(t *testing.T) {
 	rec := &recorder{}
 	r, err := New([]Tool{{
-		Name: "slow", Argv: []string{"true"}, ReadOnly: true,
+		Name: "slow", Argv: []string{"true"}, Impact: ImpactRead,
 		Timeout: 20 * time.Millisecond,
 	}}, rec)
 	if err != nil {
@@ -310,10 +336,10 @@ func TestAnOrdinaryFailureIsNotMislabelledATimeout(t *testing.T) {
 
 func TestANegativeTimeoutCannotRegister(t *testing.T) {
 	_, err := New([]Tool{{
-		Name:     "broken",
-		Argv:     []string{"true"},
-		ReadOnly: true,
-		Timeout:  -time.Second,
+		Name:    "broken",
+		Argv:    []string{"true"},
+		Impact:  ImpactRead,
+		Timeout: -time.Second,
 	}}, &recorder{})
 	if err == nil {
 		t.Fatal("a negative timeout registered")
