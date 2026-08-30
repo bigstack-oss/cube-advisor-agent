@@ -33,6 +33,8 @@ func runCmd(args []string) int {
 	dir := fs.String("dir", identity.DefaultDir, "where the identity is stored")
 	auditPath := fs.String("audit", "/var/log/cube-advisor-agent/toolcalls.log",
 		"append-only audit log of every tool call served")
+	probes := fs.Bool("probes", false,
+		"serve the probe plane: bounded measurements that create and delete their own scratch storage")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -69,7 +71,17 @@ func runCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "run: audit log: %v\n", err)
 		return exitFailed
 	}
-	reg, err := toolplane.New(toolplane.Allowlist, auditor)
+	var opts []toolplane.Option
+	var probeRunner *toolplane.ProbeRunner
+	if *probes {
+		probeRunner, err = toolplane.NewProbeRunner(toolplane.Probes, auditor)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "run: %v\n", err)
+			return exitFailed
+		}
+		opts = append(opts, toolplane.WithProbes(probeRunner))
+	}
+	reg, err := toolplane.New(toolplane.Allowlist, auditor, opts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return exitFailed
@@ -77,6 +89,13 @@ func runCmd(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	if probeRunner != nil {
+		// Sweep before serving. Scratch left by a process that was killed
+		// mid-probe outlives it, and this is the only thing that ever notices:
+		// the deferred cleanup died with the process that owed it.
+		go probeRunner.RunSweeper(ctx)
+	}
 
 	hello := tunnelproto.Hello{
 		ClusterID:       id.ClusterID,
