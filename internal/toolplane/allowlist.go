@@ -25,6 +25,43 @@ import (
 	"time"
 )
 
+// Impact is what a tool does to the cluster it runs against. It mirrors the
+// SaaS-side classification (cube-ai-advisor internal/tools), declared here
+// independently because this side is the enforcement: the SaaS's copy is
+// advice, and a compromised SaaS is the case this package exists to survive.
+//
+// The classes start at 1 so the zero value means "undeclared" and is refused —
+// the boolean this replaced also refused its own zero value, and that property
+// is what makes forgetting the field safe.
+type Impact int
+
+const (
+	// ImpactRead observes and changes nothing. Every allowlisted tool is
+	// this today.
+	ImpactRead Impact = iota + 1
+	// ImpactScratch creates and destroys its own scratch resources, or
+	// generates load, while touching no configuration — the probe class.
+	// No tool declares it yet and Register refuses it until one does.
+	ImpactScratch
+	// ImpactMutate changes cluster configuration. Never served, in any
+	// phase. The class exists so the refusal is written down.
+	ImpactMutate
+)
+
+func (i Impact) String() string {
+	switch i {
+	case 0:
+		return "undeclared"
+	case ImpactRead:
+		return "read"
+	case ImpactScratch:
+		return "scratch"
+	case ImpactMutate:
+		return "mutate"
+	}
+	return fmt.Sprintf("impact(%d)", int(i))
+}
+
 // Tool is one read-only operation the AI plane may invoke.
 type Tool struct {
 	// Name is what the SaaS asks for, matched exactly.
@@ -58,11 +95,12 @@ type Tool struct {
 	// executor context, not a caller argument.
 	Params map[string][]string
 
-	// ReadOnly must be true. It exists so that adding a mutating tool requires
-	// deliberately writing `ReadOnly: false`, which Register then refuses —
-	// the AI plane has no write path, and that should be hard to change by
+	// Impact declares what this tool does to the cluster. It must be
+	// ImpactRead today; Register refuses everything else, and refuses the
+	// zero value too, so a tool that declares nothing is not served. The
+	// AI plane has no write path, and that should be hard to change by
 	// accident.
-	ReadOnly bool
+	Impact Impact
 
 	// MaxOutputBytes caps what a single call may return. Zero means the
 	// registry default. A tool that can return a whole log file must not be
@@ -86,7 +124,7 @@ var Allowlist = []Tool{
 		Name:        "cluster_check",
 		Description: "Cluster-wide health check: every service group and its status.",
 		Argv:        []string{"hex_cli", "-c", "cluster", "-c", "check"},
-		ReadOnly:    true,
+		Impact:      ImpactRead,
 		// ~55s measured on a healthy 3-node cluster (cube-ai-advisor#52 lab
 		// run); the old 60s default left 8% headroom. 100s keeps this the
 		// first timeout to fire: under the server's 110s call cap, well under
@@ -111,7 +149,7 @@ var Allowlist = []Tool{
 				"VirtualIp",
 			},
 		},
-		ReadOnly: true,
+		Impact: ImpactRead,
 	},
 	{
 		Name:        "service_log_tail",
@@ -130,7 +168,7 @@ var Allowlist = []Tool{
 			// stays finite and the cap is visible in the allowlist itself.
 			"{lines}": {"50", "200", "1000"},
 		},
-		ReadOnly:       true,
+		Impact:         ImpactRead,
 		MaxOutputBytes: 512 << 10,
 		// journalctl over a bounded line count is quick; a tail that takes
 		// longer than this is a node problem the timeout should surface.
@@ -145,19 +183,19 @@ var Allowlist = []Tool{
 		Name:        "cube_cos_healths",
 		Description: "Cluster health summary from cube-cos-api: every service and its state.",
 		Get:         "/api/v1/datacenters/{dc}/healths",
-		ReadOnly:    true,
+		Impact:      ImpactRead,
 	},
 	{
 		Name:        "cube_cos_nodes",
 		Description: "The cluster's nodes and their roles/state from cube-cos-api.",
 		Get:         "/api/v1/datacenters/{dc}/nodes",
-		ReadOnly:    true,
+		Impact:      ImpactRead,
 	},
 	{
 		Name:        "cube_cos_events",
 		Description: "Recent cluster events from cube-cos-api — the timeline of what changed.",
 		Get:         "/api/v1/datacenters/{dc}/events",
-		ReadOnly:    true,
+		Impact:      ImpactRead,
 	},
 }
 
@@ -170,8 +208,8 @@ func (t Tool) validate() error {
 	if t.Name == "" {
 		return fmt.Errorf("tool has no name")
 	}
-	if !t.ReadOnly {
-		return fmt.Errorf("tool %q is not declared read-only; the AI plane has no write path", t.Name)
+	if t.Impact != ImpactRead {
+		return fmt.Errorf("tool %q declares impact %s; the AI plane serves reads only", t.Name, t.Impact)
 	}
 	if t.Timeout < 0 {
 		return fmt.Errorf("tool %q has a negative timeout", t.Name)

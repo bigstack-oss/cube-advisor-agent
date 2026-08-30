@@ -16,7 +16,7 @@ func healthsTool() Tool {
 		Name:        "cube_cos_healths",
 		Description: "Cluster health summary from cube-cos-api.",
 		Get:         "/api/v1/datacenters/{dc}/healths",
-		ReadOnly:    true,
+		Impact:      ImpactRead,
 	}
 }
 
@@ -29,7 +29,7 @@ func serviceHealthTool() Tool {
 		Description: "Health of one service from cube-cos-api.",
 		Get:         "/api/v1/datacenters/{dc}/healths/services/{svc}",
 		Params:      map[string][]string{"{svc}": {"Storage", "Compute"}},
-		ReadOnly:    true,
+		Impact:      ImpactRead,
 	}
 }
 
@@ -110,7 +110,7 @@ func TestAPathValueCannotTraverse(t *testing.T) {
 	// intended resource.
 	tool := Tool{
 		Name: "probe", Get: "/api/v1/datacenters/{dc}/nodes/{node}",
-		Params: map[string][]string{"{node}": {"../../secrets", "ok"}}, ReadOnly: true,
+		Params: map[string][]string{"{node}": {"../../secrets", "ok"}}, Impact: ImpactRead,
 	}
 	r, _, _ := newGetRegistry(t, []Tool{tool}, "sky-dc")
 	if _, err := r.Call(context.Background(), "probe", map[string]string{"{node}": "../../secrets"}); err == nil {
@@ -152,7 +152,7 @@ func TestAnUnconfiguredGetToolIsAModelReadableRefusal(t *testing.T) {
 
 func TestAToolCannotBeBothCommandAndGet(t *testing.T) {
 	_, err := New([]Tool{{
-		Name: "both", Argv: []string{"echo"}, Get: "/x", ReadOnly: true,
+		Name: "both", Argv: []string{"echo"}, Get: "/x", Impact: ImpactRead,
 	}}, &recorder{})
 	if err == nil {
 		t.Error("a tool declaring both an argv and a GET path registered")
@@ -160,15 +160,15 @@ func TestAToolCannotBeBothCommandAndGet(t *testing.T) {
 }
 
 func TestAGetToolStillMustBeReadOnly(t *testing.T) {
-	_, err := New([]Tool{{Name: "w", Get: "/x", ReadOnly: false}}, &recorder{})
+	_, err := New([]Tool{{Name: "w", Get: "/x", Impact: ImpactMutate}}, &recorder{})
 	if err == nil {
-		t.Error("a non-read-only Get tool registered")
+		t.Error("a Get tool declaring a mutating impact registered")
 	}
 }
 
 func TestAGetTemplateMustDeclareItsModelPlaceholders(t *testing.T) {
 	_, err := New([]Tool{{
-		Name: "u", Get: "/api/v1/datacenters/{dc}/nodes/{node}", ReadOnly: true,
+		Name: "u", Get: "/api/v1/datacenters/{dc}/nodes/{node}", Impact: ImpactRead,
 	}}, &recorder{})
 	if err == nil {
 		t.Error("a GET path with an undeclared placeholder registered")
