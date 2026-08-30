@@ -6,13 +6,33 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-type recorder struct{ calls []ToolCall }
+// recorder captures audit records. It is mutex-guarded because the probe plane
+// audits from the goroutine running a probe while the test reads: the real
+// FileAuditor locks for the same reason, and an unguarded double would make
+// the suite flaky under -race and hide a genuine race behind the noise.
+type recorder struct {
+	mu    sync.Mutex
+	calls []ToolCall
+}
 
-func (r *recorder) RecordToolCall(c ToolCall) { r.calls = append(r.calls, c) }
+func (r *recorder) RecordToolCall(c ToolCall) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, c)
+}
+
+// snapshot returns a copy for assertions taken while a probe may still be
+// writing.
+func (r *recorder) snapshot() []ToolCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ToolCall{}, r.calls...)
+}
 
 // newTestRegistry returns a registry over the real allowlist whose executor is
 // captured rather than run, so the suite never shells out and every assertion
@@ -48,20 +68,24 @@ func TestAToolThatIsNotReadOnlyCannotRegister(t *testing.T) {
 	if err == nil {
 		t.Fatal("a tool declaring a mutating impact was registered")
 	}
-	if !strings.Contains(err.Error(), "reads only") {
+	if !strings.Contains(err.Error(), "reads and probes only") {
 		t.Errorf("error should say why: %v", err)
 	}
 }
 
-// A probe-class tool is not served either: this executor has no probe plane
-// yet, and the class exists here so that fact is checked rather than assumed.
-func TestAScratchToolCannotRegisterYet(t *testing.T) {
+// A probe-class tool is refused unless this agent was built with a probe
+// plane. Enabling probes is a deliberate act at construction; without it the
+// scratch class is exactly as unservable as it was before probes existed.
+func TestAScratchToolCannotRegisterWithoutAProbePlane(t *testing.T) {
 	_, err := New([]Tool{{
 		Name: "probe_fio_volume", Argv: []string{"fio", "--name", "x"},
 		Impact: ImpactScratch,
 	}}, &recorder{})
 	if err == nil {
-		t.Fatal("a load-generating tool was registered")
+		t.Fatal("a load-generating tool was registered on an agent with no probe plane")
+	}
+	if !strings.Contains(err.Error(), "no probe plane") {
+		t.Errorf("error should say why: %v", err)
 	}
 }
 

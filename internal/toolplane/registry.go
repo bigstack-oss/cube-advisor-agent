@@ -2,6 +2,7 @@ package toolplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -59,6 +60,11 @@ type Registry struct {
 	// run executes a command; swapped in tests so the suite never shells out.
 	run func(ctx context.Context, argv []string, maxBytes int) ([]byte, error)
 
+	// probes runs the scratch-class tools. Nil on an agent built without a
+	// probe plane, and then the scratch class is refused at registration, so a
+	// nil here is never reached at call time.
+	probes *ProbeRunner
+
 	// datacenter is the agent's own cluster identity, filled into a Get tool's
 	// {dc}. Empty until deployment wires it, which is why an unconfigured Get
 	// tool refuses rather than reading the wrong cluster.
@@ -90,7 +96,7 @@ func (notConfigured) Get(context.Context, string, int) ([]byte, error) {
 // Registration is where a bad tool is caught. A malformed entry discovered at
 // call time would mean an agent that looked healthy until the SaaS happened to
 // invoke the broken tool.
-func New(tools []Tool, audit Auditor) (*Registry, error) {
+func New(tools []Tool, audit Auditor, opts ...Option) (*Registry, error) {
 	if audit == nil {
 		return nil, fmt.Errorf("toolplane: an auditor is required; every call must be inspectable by the customer")
 	}
@@ -101,8 +107,18 @@ func New(tools []Tool, audit Auditor) (*Registry, error) {
 		run:     runCommand,
 		cubeCOS: notConfigured{},
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	if r.probes != nil {
+		// Enabling the plane and advertising it are one act. Appending here
+		// rather than asking the caller to compose the two lists removes the
+		// half-configured agent: probe controls with no runner, or a runner
+		// nothing can reach.
+		tools = append(append([]Tool{}, tools...), ProbeControls...)
+	}
 	for _, t := range tools {
-		if err := t.validate(); err != nil {
+		if err := t.validate(r.probes != nil); err != nil {
 			return nil, fmt.Errorf("toolplane: %w", err)
 		}
 		if _, dup := r.tools[t.Name]; dup {
@@ -111,6 +127,18 @@ func New(tools []Tool, audit Auditor) (*Registry, error) {
 		r.tools[t.Name] = t
 	}
 	return r, nil
+}
+
+// Option configures a registry at construction.
+type Option func(*Registry)
+
+// WithProbes enables the scratch class by giving the registry a probe runner.
+//
+// Without it the scratch class is refused at registration, so enabling probes
+// is a deliberate act at the one place a reviewer already looks — and an agent
+// that was not built for probes cannot be talked into running one.
+func WithProbes(pr *ProbeRunner) Option {
+	return func(r *Registry) { r.probes = pr }
 }
 
 // SetRunnerForTest replaces the executor.
@@ -188,6 +216,10 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 		return nil, fmt.Errorf("%w: %q", ErrUnknownTool, name)
 	}
 
+	if tool.Control != 0 {
+		return r.callControl(ctx, tool, args)
+	}
+
 	if tool.Get != "" {
 		return r.callGet(ctx, tool, args)
 	}
@@ -231,6 +263,67 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 	}
 	r.audit.RecordToolCall(rec)
 	return out, runErr
+}
+
+// callControl dispatches a probe-plane control call.
+//
+// Both operations are short by construction — starting a probe returns once
+// the goroutine is launched, polling one reads a map — so neither needs the
+// timeout ladder stretched to fit the measurement it controls. Results go back
+// as JSON so the SaaS forwards numbers rather than prose.
+func (r *Registry) callControl(ctx context.Context, tool Tool, args map[string]string) ([]byte, error) {
+	if r.probes == nil {
+		// Unreachable: the scratch class is refused at registration without a
+		// runner. Kept so a future control tool that is not scratch-class
+		// cannot reach a nil runner unnoticed.
+		return nil, fmt.Errorf("%w: %q", ErrUnknownTool, tool.Name)
+	}
+	for k := range args {
+		if k != "probe" && k != "run" {
+			r.audit.RecordToolCall(ToolCall{
+				Tool: tool.Name, Args: args, Allowed: false,
+				Reason: fmt.Sprintf("unexpected argument %q", k), At: time.Now().UTC(),
+			})
+			return nil, fmt.Errorf("%w: unexpected argument %q", ErrBadArgument, k)
+		}
+	}
+
+	switch tool.Control {
+	case ControlProbeStart:
+		name, ok := args["probe"]
+		if !ok {
+			return nil, fmt.Errorf("%w: probe_start needs a probe name", ErrBadArgument)
+		}
+		id, err := r.probes.Start(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"run": id, "state": string(ProbeRunning)})
+
+	case ControlProbeStatus:
+		id, ok := args["run"]
+		if !ok {
+			return nil, fmt.Errorf("%w: probe_status needs a run id", ErrBadArgument)
+		}
+		res, err := r.probes.Status(id)
+		if err != nil {
+			r.audit.RecordToolCall(ToolCall{
+				Tool: tool.Name, Args: args, Allowed: false,
+				Reason: "no such run", At: time.Now().UTC(),
+			})
+			return nil, err
+		}
+		out, err := json.Marshal(res)
+		if err != nil {
+			return nil, err
+		}
+		r.audit.RecordToolCall(ToolCall{
+			Tool: tool.Name, Args: args, Allowed: true,
+			At: time.Now().UTC(), Bytes: len(out),
+		})
+		return out, nil
+	}
+	return nil, fmt.Errorf("%w: %q", ErrUnknownTool, tool.Name)
 }
 
 // callGet resolves a Get tool's path and fetches it from cube-cos-api.

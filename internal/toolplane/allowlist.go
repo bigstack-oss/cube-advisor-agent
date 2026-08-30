@@ -62,6 +62,27 @@ func (i Impact) String() string {
 	return fmt.Sprintf("impact(%d)", int(i))
 }
 
+// ControlOp identifies a built-in probe-plane operation. Like Impact it starts
+// at 1, so a tool that sets nothing is not accidentally a control tool.
+type ControlOp int
+
+const (
+	// ControlProbeStart begins a probe run and returns its id.
+	ControlProbeStart ControlOp = iota + 1
+	// ControlProbeStatus reports a run's state and, when finished, its metrics.
+	ControlProbeStatus
+)
+
+func (c ControlOp) String() string {
+	switch c {
+	case ControlProbeStart:
+		return "probe_start"
+	case ControlProbeStatus:
+		return "probe_status"
+	}
+	return fmt.Sprintf("control(%d)", int(c))
+}
+
 // Tool is one read-only operation the AI plane may invoke.
 type Tool struct {
 	// Name is what the SaaS asks for, matched exactly.
@@ -77,6 +98,18 @@ type Tool struct {
 	// Exactly one of Argv or Get is set: a tool is a local command or a
 	// cube-cos-api read, never both.
 	Argv []string
+
+	// Control names a built-in operation of the probe plane rather than a
+	// command or a read. A control tool substitutes nothing into a command
+	// line — it hands its argument to the probe runner, which checks it
+	// against the probes it serves or the runs it has started — so the
+	// finite-value-set rule that guards argv substitution does not apply and
+	// would be theatre if it did. What guards a control tool instead is that
+	// its argument reaches no execve: a probe name is a map lookup, and a run
+	// id is one this process generated.
+	//
+	// Exactly one of Argv, Get or Control is set.
+	Control ControlOp
 
 	// Get is a cube-cos-api path template for a read-only HTTP GET, e.g.
 	// "/api/v1/datacenters/{dc}/healths". The method is GET, always — there is
@@ -199,29 +232,98 @@ var Allowlist = []Tool{
 	},
 }
 
+// ProbeControls is the probe plane's half of the allowlist, kept separate
+// because it is served only by an agent that has a probe runner.
+//
+// New appends these itself when WithProbes is given, so enabling the plane and
+// advertising it are one act: an agent cannot end up offering probe_start with
+// nothing behind it, nor running a probe plane nobody can reach.
+var ProbeControls = []Tool{
+	// Both entries are short calls: starting a probe returns as soon as the
+	// run is launched, and polling one is a map read. Neither holds a tunnel
+	// channel open while a measurement runs, which is why the timeout ladder
+	// did not have to grow to accommodate a 30-second fio.
+	{
+		Name: "probe_start",
+		Description: "Start a bounded measurement that creates and deletes its own scratch " +
+			"storage. Returns a run id immediately; poll probe_status for the result.",
+		Control: ControlProbeStart,
+		// Scratch class: starting a probe is the act that generates load.
+		// Registration refuses this unless the agent was built with a probe
+		// runner, so an executor without one advertises nothing it cannot do.
+		Impact: ImpactScratch,
+	},
+	{
+		Name:        "probe_status",
+		Description: "State and, once finished, the parsed metrics of a probe run.",
+		Control:     ControlProbeStatus,
+		// Polling reads a result this process already has. It starts nothing
+		// and touches no cluster resource, so it is a read even though the run
+		// it reports on was not.
+		Impact: ImpactRead,
+	},
+}
+
 // dcPlaceholder is the one placeholder the executor fills from its own config
 // rather than from a caller argument: the agent's datacenter.
 const dcPlaceholder = "{dc}"
 
 // validate checks a tool is well-formed for registration.
-func (t Tool) validate() error {
+//
+// probes reports whether this executor has a probe runner wired. Without one,
+// the scratch class is refused exactly as it was before the probe plane
+// existed: an agent that cannot run a probe must not advertise that it can.
+func (t Tool) validate(probes bool) error {
 	if t.Name == "" {
 		return fmt.Errorf("tool has no name")
 	}
-	if t.Impact != ImpactRead {
-		return fmt.Errorf("tool %q declares impact %s; the AI plane serves reads only", t.Name, t.Impact)
+	switch t.Impact {
+	case ImpactRead:
+		// Always served.
+	case ImpactScratch:
+		if !probes {
+			return fmt.Errorf("tool %q declares impact scratch but this agent has no probe plane", t.Name)
+		}
+	default:
+		return fmt.Errorf("tool %q declares impact %s; the AI plane serves reads and probes only", t.Name, t.Impact)
 	}
 	if t.Timeout < 0 {
 		return fmt.Errorf("tool %q has a negative timeout", t.Name)
 	}
-	hasArgv, hasGet := len(t.Argv) > 0, t.Get != ""
-	if hasArgv == hasGet {
-		return fmt.Errorf("tool %q must be exactly one of a command (Argv) or a cube-cos-api read (Get)", t.Name)
+	kinds := 0
+	for _, set := range []bool{len(t.Argv) > 0, t.Get != "", t.Control != 0} {
+		if set {
+			kinds++
+		}
 	}
-	if hasGet {
+	if kinds != 1 {
+		return fmt.Errorf("tool %q must be exactly one of a command (Argv), a cube-cos-api read (Get) or a probe-plane control (Control)", t.Name)
+	}
+	switch {
+	case t.Control != 0:
+		return t.validateControl()
+	case t.Get != "":
 		return t.validateGet()
+	default:
+		return t.validateCommand()
 	}
-	return t.validateCommand()
+}
+
+// validateControl checks a probe-plane control entry.
+//
+// A control tool declares no Params: its argument is handed to the probe
+// runner, which validates it against what it serves, and never substituted
+// into anything. Declaring a value set here would suggest the argument is
+// checked by this file when it is not, and a guard that looks stronger than
+// it is is worse than no guard at all.
+func (t Tool) validateControl() error {
+	if len(t.Params) > 0 {
+		return fmt.Errorf("tool %q is a control tool and must declare no parameters; its argument is checked by the probe runner, not substituted", t.Name)
+	}
+	if t.Control != ControlProbeStart && t.Control != ControlProbeStatus {
+		return fmt.Errorf("tool %q declares an unknown control operation", t.Name)
+	}
+	return nil
 }
 
 func (t Tool) validateCommand() error {
