@@ -110,6 +110,14 @@ func enrollCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "enroll: -server is required")
 		return exitUsage
 	}
+	// An explicit -cluster always wins: the caller knows the cluster, and on a
+	// CubeCOS node the enrolment wrapper passes it. The rest is for a
+	// hand-started enrolment, where the driver's assigned id beats the
+	// hostname — the hostname names one node, and a cluster outlives any of
+	// them.
+	if *cluster == "" {
+		*cluster = clusterIDFromDriver()
+	}
 	if *cluster == "" {
 		h, err := os.Hostname()
 		if err != nil {
