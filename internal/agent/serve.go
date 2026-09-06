@@ -11,11 +11,13 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
@@ -38,6 +40,13 @@ type Server struct {
 // up. Today: tools ≤100s < this 110s < SaaS 120s.
 const defaultCallTimeout = 110 * time.Second
 
+// maxConsecutiveAcceptErrors ends the session once channel-open keeps failing;
+// cmd/agent then reconnects with backoff.
+const maxConsecutiveAcceptErrors = 10
+
+// acceptErrorPause keeps a burst of rejects off the CPU.
+const acceptErrorPause = 200 * time.Millisecond
+
 // Serve accepts channels until the session ends or ctx is cancelled.
 //
 // Each channel is handled in its own goroutine: a tool that hangs must not
@@ -47,18 +56,27 @@ func (s *Server) Serve(ctx context.Context, sess *tunnel.Session) error {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
+	var consecutive int
 	for {
 		ch, err := sess.AcceptChannel(ctx)
 		if err != nil {
 			if isSessionOver(err) || ctx.Err() != nil {
 				return nil
 			}
-			// A malformed or refused channel-open is not fatal to the session:
-			// the peer may simply be a version we partly disagree with. Log it
-			// and keep serving.
-			log.Printf("agent: rejecting channel: %v", err)
+			// One bad open is not fatal — log it and keep serving. Pause, and
+			// give up once it stops looking like one bad open.
+			consecutive++
+			log.Printf("agent: rejecting channel (%d/%d): %v",
+				consecutive, maxConsecutiveAcceptErrors, err)
+			if consecutive >= maxConsecutiveAcceptErrors {
+				return fmt.Errorf("agent: %d consecutive channel-open failures: %w", consecutive, err)
+			}
+			if tunnel.Sleep(ctx, acceptErrorPause) != nil {
+				return nil
+			}
 			continue
 		}
+		consecutive = 0
 		wg.Add(1)
 		go func(ch *tunnel.Channel) {
 			defer wg.Done()
@@ -142,7 +160,12 @@ func writeResult(w io.Writer, r tunnelproto.ToolResult) error {
 // isSessionOver reports whether an accept error means the tunnel has gone,
 // rather than one channel being unacceptable.
 func isSessionOver(err error) bool {
-	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	// A dead transport arrives on the same path as a refused channel-open, but
+	// means the session is gone rather than one channel.
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
 		return true
 	}
 	// yamux reports its own shutdown as a plain error value.

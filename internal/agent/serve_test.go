@@ -3,9 +3,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -339,5 +344,77 @@ func TestReadArgsRejectsAnOversizedFrame(t *testing.T) {
 	got, err := readArgs(strings.NewReader(`{"{group}":"Storage"}` + "\n"))
 	if err != nil || got["{group}"] != "Storage" {
 		t.Errorf("readArgs = %v, %v", got, err)
+	}
+}
+
+// The 147 GB incident: a peer reset arrived through AcceptChannel, isSessionOver
+// did not recognise it, and the accept loop treated a dead transport as one bad
+// channel — logging and retrying with no pause and no bound until the node's
+// root filesystem was full.
+func TestATransportResetEndsTheSession(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		over bool
+	}{
+		{"peer reset", &net.OpError{Op: "read", Net: "tcp",
+			Err: os.NewSyscallError("read", syscall.ECONNRESET)}, true},
+		{"broken pipe", &net.OpError{Op: "write", Net: "tcp",
+			Err: os.NewSyscallError("write", syscall.EPIPE)}, true},
+		{"wrapped reset", fmt.Errorf("failed to get reader: failed to read frame header: %w",
+			&net.OpError{Op: "read", Net: "tcp",
+				Err: os.NewSyscallError("read", syscall.ECONNRESET)}), true},
+		{"unexpected eof", io.ErrUnexpectedEOF, true},
+		{"eof", io.EOF, true},
+		{"a merely invalid open", errors.New("tunnel: rejecting channel open from peer: bad target"), false},
+	}
+	for _, c := range cases {
+		if got := isSessionOver(c.err); got != c.over {
+			t.Errorf("%s: isSessionOver = %v, want %v", c.name, got, c.over)
+		}
+	}
+}
+
+// Serve must return when the transport dies under it, so cmd/agent can
+// reconnect with backoff. Before the fix this spun forever.
+func TestServeReturnsWhenThePeerResetsTheConnection(t *testing.T) {
+	rec := &recorder{}
+	reg, err := toolplane.New(toolplane.Allowlist, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := connPair(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	saasCh := make(chan *tunnel.Session, 1)
+	go func() {
+		s, _ := tunnel.Accept(ctx, b, tunnelproto.Negotiate)
+		saasCh <- s
+	}()
+	agentSess, err := tunnel.Dial(ctx, a, tunnelproto.Hello{
+		ClusterID: "c", Fingerprint: "f", AgentVersion: "0.1.0",
+		ProtocolVersion: tunnelproto.Version,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-saasCh
+
+	srv := &Server{Tools: reg}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx, agentSess) }()
+
+	// SO_LINGER 0 makes Close send an RST rather than a FIN, which is what the
+	// agent saw in the field.
+	if tc, ok := b.(*net.TCPConn); ok {
+		_ = tc.SetLinger(0)
+	}
+	b.Close()
+
+	select {
+	case <-errCh:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Serve did not return after the peer reset the connection")
 	}
 }
