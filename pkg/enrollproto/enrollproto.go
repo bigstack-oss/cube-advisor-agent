@@ -35,7 +35,7 @@ type Request struct {
 
 // Response is what the service returns on success.
 type Response struct {
-	// Certificate is the signed per-cluster certificate, PEM.
+	// Certificate is the signed per-node certificate, PEM.
 	Certificate string `json:"certificate"`
 
 	// CA is the enrollment authority, PEM. The agent pins it as the only root

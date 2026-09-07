@@ -1,4 +1,4 @@
-// Package identity holds the agent's per-cluster mTLS identity.
+// Package identity holds the agent's per-node mTLS identity.
 //
 // The private key is generated on the cluster and never leaves it. Enrollment
 // sends a certificate signing request; the SaaS signs it and returns a
@@ -171,10 +171,11 @@ func Load(dir string) (*Identity, error) {
 	caPEM, _ := os.ReadFile(filepath.Join(dir, caFileName)) // optional
 
 	id := &Identity{key: key, certPEM: certPEM, caPEM: caPEM}
-	if node, cluster, err := id.subject(); err == nil {
-		id.NodeID = node
-		id.ClusterID = cluster
+	node, cluster, err := id.subject()
+	if err != nil {
+		return nil, err
 	}
+	id.NodeID, id.ClusterID = node, cluster
 	return id, nil
 }
 
@@ -182,6 +183,11 @@ func Load(dir string) (*Identity, error) {
 // certificate: CommonName is the node, the single OrganizationalUnit is the
 // cluster. Nothing else on disk records them, so the certificate is the
 // only place either one is persisted.
+//
+// A certificate with no OU is an identity issued before per-node enrolment.
+// The tunnel refuses it, so this refuses it here with something the operator
+// can act on, rather than reporting an empty cluster id that the handshake
+// then rejects as "hello carried no cluster id".
 func (i *Identity) subject() (nodeID, clusterID string, err error) {
 	blk, _ := pem.Decode(i.certPEM)
 	if blk == nil {
@@ -191,10 +197,14 @@ func (i *Identity) subject() (nodeID, clusterID string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	if len(crt.Subject.OrganizationalUnit) == 1 {
-		clusterID = crt.Subject.OrganizationalUnit[0]
+	if len(crt.Subject.OrganizationalUnit) != 1 {
+		return "", "", fmt.Errorf(
+			"identity: certificate for %q carries %d organizational units, want exactly one holding the cluster id; "+
+				"identities issued before per-node enrolment carry none — re-enrol this node with "+
+				"`cube-advisor-agent enroll -server <url> -cluster <cluster> -node <node> -token-file <file> -force`",
+			crt.Subject.CommonName, len(crt.Subject.OrganizationalUnit))
 	}
-	return crt.Subject.CommonName, clusterID, nil
+	return crt.Subject.CommonName, crt.Subject.OrganizationalUnit[0], nil
 }
 
 // SaveServer persists the tunnel address enrolment resolved, so a later `run`

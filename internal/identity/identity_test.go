@@ -488,3 +488,46 @@ func freshIdentity(t *testing.T) *Identity {
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})
 	return &Identity{ClusterID: "acme-prod-01", NodeID: "sky142", key: key, certPEM: certPEM, caPEM: caPEM}
 }
+
+// A certificate issued before per-node identity carries no OU. Loading it must
+// fail with something an operator can act on: without this, ClusterID came
+// back empty, the Hello carried no cluster id, and the tunnel refused the
+// handshake with a message about the protocol rather than about re-enrolling.
+func TestLoadRefusesACertificateWithoutAClusterOU(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ous  []string
+	}{
+		{"no OU", nil},
+		{"two OUs", []string{"acme-prod-01", "globex-prod-01"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ca, caKey := testCA(t)
+			key, err := NewKey()
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacy := &Identity{
+				key:     key,
+				certPEM: signFor(t, &key.PublicKey, "acme-prod-01", tc.ous, ca, caKey),
+				caPEM:   pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw}),
+			}
+			if err := legacy.Save(dir); err != nil {
+				t.Fatal(err)
+			}
+
+			id, err := Load(dir)
+			if err == nil {
+				t.Fatalf("Load accepted a certificate with %d OUs: ClusterID=%q", len(tc.ous), id.ClusterID)
+			}
+			// The cure, not the diagnosis.
+			if !strings.Contains(err.Error(), "re-enrol") {
+				t.Errorf("error should tell the operator to re-enrol: %v", err)
+			}
+			if !strings.Contains(err.Error(), "cluster id") {
+				t.Errorf("error should name the missing cluster id: %v", err)
+			}
+		})
+	}
+}

@@ -46,6 +46,49 @@ may only target a tool, and a `console` channel may never target one. That is
 what makes "the AI has no path to a shell" a structural claim rather than a
 convention in the agent's code.
 
+## Enrolling
+
+Identity is **per node**, not per cluster: every node of a cluster enrols with
+its own pairing token and holds its own certificate and its own tunnel session,
+so the cluster keeps a tunnel when one node goes down.
+
+```sh
+cube-advisor-agent enroll \
+  -server https://advisor.bigstack.co \
+  -cluster ky3haclust01 \
+  -node sky142 \
+  -token-file /run/advisor-token
+```
+
+- `-cluster` — the cluster this node belongs to. Read from the CubeCOS driver
+  when omitted, and the hostname as a last resort.
+- `-node` — this node's id. Defaults to the hostname, which is what an
+  operator wants on a CubeCOS node; pass it explicitly only when the hostname
+  is not the id the SaaS issued the token for.
+
+The token names one `(cluster, node)` pair and is single-use, so a three-node
+cluster needs three tokens. The certificate that comes back carries the node in
+its `CommonName` and the cluster in its single `OrganizationalUnit`;
+`cube-advisor-agent status` prints both.
+
+### Upgrading from a per-cluster identity
+
+Agents enrolled before per-node identity **must re-enrol**. Their certificates
+carry no `OrganizationalUnit`, so the tunnel refuses them, and the SaaS
+migration revokes those identities outright (`revoked_reason = "superseded by
+per-node identity; re-enrol this node"`) rather than pretending they still
+work. There is no compatibility path: get a fresh per-node token for each node
+and run
+
+```sh
+cube-advisor-agent enroll -server <url> -cluster <cluster> -node <node> \
+  -token-file <file> -force
+```
+
+`-force` is needed because the node already holds an identity on disk. Until
+that happens `run` fails at load with an error naming re-enrolment, rather than
+connecting with an empty cluster id.
+
 ## Releases and verification
 
 `mkrelease` builds one binary per architecture and writes `manifest.txt` beside
@@ -89,7 +132,7 @@ to keep the process alive.
 Early, but no longer only a protocol. Built and tested: the wire protocol and
 its target validation, the multiplexed transport with flow control and
 reconnect, the read-only tool plane and its allowlist, the serve loop joining
-the two, the enrolled per-cluster identity, and the release manifest.
+the two, the enrolled per-node identity, and the release manifest.
 
 Not built: the console plane, the daemon that wires the pieces into a running
 agent (`cmd/agent` is a stub), and the OS-side verifier — which belongs in
