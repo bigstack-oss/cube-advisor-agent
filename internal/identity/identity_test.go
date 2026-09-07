@@ -36,7 +36,7 @@ func TestEnrollmentNeverSendsPrivateKeyMaterial(t *testing.T) {
 	defer srv.Close()
 
 	e := &Enroller{BaseURL: srv.URL, HTTPClient: srv.Client()}
-	id, err := e.Enroll(context.Background(), "acme-prod-01", "pairing-token")
+	id, err := e.Enroll(context.Background(), "acme-prod-01", "sky142", "pairing-token")
 	if err != nil {
 		t.Fatalf("Enroll: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestPairingTokenTravelsInAHeaderNotTheBody(t *testing.T) {
 	defer srv.Close()
 
 	e := &Enroller{BaseURL: srv.URL, HTTPClient: srv.Client()}
-	if _, err := e.Enroll(context.Background(), "acme-prod-01", "secret-token-xyz"); err != nil {
+	if _, err := e.Enroll(context.Background(), "acme-prod-01", "sky142", "secret-token-xyz"); err != nil {
 		t.Fatal(err)
 	}
 	if auth != "Bearer secret-token-xyz" {
@@ -147,6 +147,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if loaded.ClusterID != "acme-prod-01" {
 		t.Errorf("ClusterID = %q, recovered from the certificate", loaded.ClusterID)
+	}
+	if loaded.NodeID != "sky142" {
+		t.Errorf("NodeID = %q, recovered from the certificate", loaded.NodeID)
 	}
 }
 
@@ -250,9 +253,9 @@ func TestFingerprintIsStableAndKeyDerived(t *testing.T) {
 
 // --- CSR -----------------------------------------------------------------
 
-func TestCSRCarriesTheClusterIDAndVerifies(t *testing.T) {
+func TestCSRCarriesTheNodeAndClusterIDAndVerifies(t *testing.T) {
 	key, _ := NewKey()
-	csrPEM, err := CSR(key, "acme-prod-01")
+	csrPEM, err := CSR(key, "acme-prod-01", "sky142")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,11 +270,17 @@ func TestCSRCarriesTheClusterIDAndVerifies(t *testing.T) {
 	if err := csr.CheckSignature(); err != nil {
 		t.Errorf("CSR signature does not verify: %v", err)
 	}
-	if csr.Subject.CommonName != "acme-prod-01" {
-		t.Errorf("CommonName = %q", csr.Subject.CommonName)
+	if csr.Subject.CommonName != "sky142" {
+		t.Errorf("CommonName = %q, want the node id", csr.Subject.CommonName)
 	}
-	if _, err := CSR(key, ""); err == nil {
+	if len(csr.Subject.OrganizationalUnit) != 1 || csr.Subject.OrganizationalUnit[0] != "acme-prod-01" {
+		t.Errorf("OU = %v, want exactly one entry, the cluster id", csr.Subject.OrganizationalUnit)
+	}
+	if _, err := CSR(key, "", "sky142"); err == nil {
 		t.Error("a CSR without a cluster id was accepted")
+	}
+	if _, err := CSR(key, "acme-prod-01", ""); err == nil {
+		t.Error("a CSR without a node id was accepted")
 	}
 }
 
@@ -286,7 +295,7 @@ func TestEnrollmentFailuresAreDistinguishable(t *testing.T) {
 	defer rejecting.Close()
 
 	e := &Enroller{BaseURL: rejecting.URL, HTTPClient: rejecting.Client()}
-	_, err := e.Enroll(context.Background(), "acme-prod-01", "stale-token")
+	_, err := e.Enroll(context.Background(), "acme-prod-01", "sky142", "stale-token")
 	if !errors.Is(err, ErrTokenRejected) {
 		t.Errorf("a rejected token gave %v, want ErrTokenRejected", err)
 	}
@@ -295,12 +304,12 @@ func TestEnrollmentFailuresAreDistinguishable(t *testing.T) {
 	}
 
 	unreachable := &Enroller{BaseURL: "http://127.0.0.1:1", HTTPClient: &http.Client{Timeout: time.Second}}
-	if _, err := unreachable.Enroll(context.Background(), "acme-prod-01", "t"); err == nil ||
+	if _, err := unreachable.Enroll(context.Background(), "acme-prod-01", "sky142", "t"); err == nil ||
 		!strings.Contains(err.Error(), "unreachable") {
 		t.Errorf("an unreachable service gave %v", err)
 	}
 
-	if _, err := (&Enroller{BaseURL: "http://x"}).Enroll(context.Background(), "c", ""); err == nil {
+	if _, err := (&Enroller{BaseURL: "http://x"}).Enroll(context.Background(), "c", "n", ""); err == nil {
 		t.Error("enrollment without a token was accepted")
 	}
 }
@@ -313,7 +322,7 @@ func TestEnrollAndSaveRefusesToReplaceAnIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := &Enroller{BaseURL: "http://unused"}
-	_, err := e.EnrollAndSave(context.Background(), dir, "acme-prod-01", "token")
+	_, err := e.EnrollAndSave(context.Background(), dir, "acme-prod-01", "sky142", "token")
 	if !errors.Is(err, ErrAlreadyEnrolled) {
 		t.Fatalf("err = %v, want ErrAlreadyEnrolled", err)
 	}
@@ -329,13 +338,13 @@ func TestEnrollmentRejectsACertificateForADifferentKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Sign a certificate for an unrelated key.
 		stranger, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		certPEM := signFor(t, &stranger.PublicKey, "acme-prod-01", ca, caKey)
+		certPEM := signFor(t, &stranger.PublicKey, "sky142", []string{"acme-prod-01"}, ca, caKey)
 		_ = json.NewEncoder(w).Encode(EnrollResponse{Certificate: string(certPEM)})
 	}))
 	defer srv.Close()
 
 	e := &Enroller{BaseURL: srv.URL, HTTPClient: srv.Client()}
-	if _, err := e.Enroll(context.Background(), "acme-prod-01", "token"); err == nil {
+	if _, err := e.Enroll(context.Background(), "acme-prod-01", "sky142", "token"); err == nil {
 		t.Fatal("a certificate for a different key was accepted")
 	}
 }
@@ -424,11 +433,11 @@ func testCA(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
 	return crt, key
 }
 
-func signFor(t *testing.T, pub *ecdsa.PublicKey, cn string, ca *x509.Certificate, caKey *ecdsa.PrivateKey) []byte {
+func signFor(t *testing.T, pub *ecdsa.PublicKey, cn string, ou []string, ca *x509.Certificate, caKey *ecdsa.PrivateKey) []byte {
 	t.Helper()
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: cn},
+		Subject:      pkix.Name{CommonName: cn, OrganizationalUnit: ou},
 		NotBefore:    time.Now().Add(-time.Minute),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -460,7 +469,7 @@ func writeSignedResponse(t *testing.T, w http.ResponseWriter, reqBody []byte, ca
 	if !ok {
 		t.Fatal("CSR did not carry an ECDSA public key")
 	}
-	certPEM := signFor(t, pub, csr.Subject.CommonName, ca, caKey)
+	certPEM := signFor(t, pub, csr.Subject.CommonName, csr.Subject.OrganizationalUnit, ca, caKey)
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})
 	_ = json.NewEncoder(w).Encode(EnrollResponse{
 		Certificate: string(certPEM), CA: string(caPEM),
@@ -475,7 +484,7 @@ func freshIdentity(t *testing.T) *Identity {
 	if err != nil {
 		t.Fatal(err)
 	}
-	certPEM := signFor(t, &key.PublicKey, "acme-prod-01", ca, caKey)
+	certPEM := signFor(t, &key.PublicKey, "sky142", []string{"acme-prod-01"}, ca, caKey)
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})
-	return &Identity{ClusterID: "acme-prod-01", key: key, certPEM: certPEM, caPEM: caPEM}
+	return &Identity{ClusterID: "acme-prod-01", NodeID: "sky142", key: key, certPEM: certPEM, caPEM: caPEM}
 }

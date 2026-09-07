@@ -20,7 +20,8 @@ const Path = "/api/v1/enroll"
 type Request struct {
 	ClusterID string `json:"clusterId"`
 
-	// CSR is PEM, carrying the public key and the cluster's name.
+	// CSR is PEM, carrying the public key and the node's and cluster's names
+	// (CommonName and OrganizationalUnit, respectively).
 	CSR string `json:"csr"`
 
 	// Fingerprint is the agent's own derivation from its public key. The
