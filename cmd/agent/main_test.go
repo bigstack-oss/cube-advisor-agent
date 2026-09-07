@@ -187,8 +187,11 @@ func fakeEnrollServer(t *testing.T) *httptest.Server {
 		}
 		tmpl := &x509.Certificate{
 			SerialNumber: big.NewInt(time.Now().UnixNano()),
-			Subject:      pkix.Name{CommonName: csr.Subject.CommonName},
-			NotBefore:    time.Now().Add(-time.Minute),
+			Subject: pkix.Name{
+				CommonName:         csr.Subject.CommonName,
+				OrganizationalUnit: csr.Subject.OrganizationalUnit,
+			},
+			NotBefore: time.Now().Add(-time.Minute),
 			NotAfter:     time.Now().Add(time.Hour),
 			KeyUsage:     x509.KeyUsageDigitalSignature,
 			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
@@ -244,6 +247,33 @@ func TestEnrollPersistsAnExplicitTunnelAddress(t *testing.T) {
 	}
 	if got != "tunnel.example:9443" {
 		t.Errorf("persisted tunnel address = %q, want the explicit -tunnel value", got)
+	}
+}
+
+// The CSR must carry the node as CommonName and the cluster as its single OU;
+// what enrollment returns is what gets persisted, so this is the whole path
+// from an operator's flags to the identity on disk.
+func TestEnrollCarriesTheNodeAndClusterIntoTheIdentity(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeEnrollServer(t)
+	defer srv.Close()
+
+	code := enrollCmd([]string{
+		"-server", srv.URL, "-cluster", "ky3haclust01", "-node", "SKY142",
+		"-dir", dir, "-token", "t",
+	})
+	if code != exitOK {
+		t.Fatalf("enrollCmd exit = %d", code)
+	}
+	id, err := identity.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if id.ClusterID != "ky3haclust01" {
+		t.Errorf("ClusterID = %q", id.ClusterID)
+	}
+	if id.NodeID != "sky142" {
+		t.Errorf("NodeID = %q, want the -node value folded to lower case", id.NodeID)
 	}
 }
 

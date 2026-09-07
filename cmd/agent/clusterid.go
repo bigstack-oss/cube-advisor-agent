@@ -17,11 +17,12 @@ const clusterIDKey = "CUBE_CLUSTER_ID"
 // or "" when this is not a driver-deployed cluster.
 //
 // Why prefer it over the hostname: a cluster id is a one-way door. It becomes
-// the CommonName of the certificate the tunnel admits on, and five tables in
-// the SaaS reference it without ON UPDATE CASCADE, so renaming means
-// re-enrolling. The driver's value is derived from the cluster UUID and so is
-// unique by construction, where a hostname is unique only by luck — two
-// customers can each have a `controller`, and the SaaS primary key is global.
+// the OrganizationalUnit of the certificate the tunnel admits on, and five
+// tables in the SaaS reference it without ON UPDATE CASCADE, so renaming
+// means re-enrolling every node. The driver's value is derived from the
+// cluster UUID and so is unique by construction, where a hostname is unique
+// only by luck — two customers can each have a `controller`, and the SaaS
+// primary key is global.
 //
 // Absence is not an error. A hand-built cluster has no such file, and the
 // caller falls back to what it knows.

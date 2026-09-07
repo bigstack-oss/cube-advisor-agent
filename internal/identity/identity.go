@@ -37,10 +37,12 @@ const (
 // gets fixed.
 const keyFileMode os.FileMode = 0o600
 
-// Identity is the agent's cluster identity: a private key that never leaves,
-// the certificate the SaaS signed for it, and the CA that certificate chains to.
+// Identity is this node's identity within its cluster: a private key that
+// never leaves, the certificate the SaaS signed for it, and the CA that
+// certificate chains to.
 type Identity struct {
 	ClusterID string
+	NodeID    string
 	key       *ecdsa.PrivateKey
 	certPEM   []byte
 	caPEM     []byte
@@ -59,16 +61,25 @@ func NewKey() (*ecdsa.PrivateKey, error) {
 	return k, nil
 }
 
-// CSR returns a PEM certificate signing request for clusterID.
+// CSR returns a PEM certificate signing request for nodeID within clusterID.
 //
-// It carries the public key and the cluster's name. It does not, and must not,
-// carry the private key — see the test that inspects the bytes.
-func CSR(key *ecdsa.PrivateKey, clusterID string) ([]byte, error) {
+// The node goes in CommonName, the cluster in the single-valued
+// OrganizationalUnit — the SaaS refuses a CSR without exactly one OU, so a CSR
+// built before this change cannot be admitted silently. It carries the public
+// key and these names. It does not, and must not, carry the private key —
+// see the test that inspects the bytes.
+func CSR(key *ecdsa.PrivateKey, clusterID, nodeID string) ([]byte, error) {
 	if clusterID == "" {
 		return nil, fmt.Errorf("identity: a CSR needs a cluster id")
 	}
+	if nodeID == "" {
+		return nil, fmt.Errorf("identity: a CSR needs a node id")
+	}
 	tmpl := &x509.CertificateRequest{
-		Subject:            pkix.Name{CommonName: clusterID},
+		Subject: pkix.Name{
+			CommonName:         nodeID,
+			OrganizationalUnit: []string{clusterID},
+		},
 		SignatureAlgorithm: x509.ECDSAWithSHA256,
 	}
 	der, err := x509.CreateCertificateRequest(rand.Reader, tmpl, key)
@@ -160,22 +171,30 @@ func Load(dir string) (*Identity, error) {
 	caPEM, _ := os.ReadFile(filepath.Join(dir, caFileName)) // optional
 
 	id := &Identity{key: key, certPEM: certPEM, caPEM: caPEM}
-	if cn, err := id.commonName(); err == nil {
-		id.ClusterID = cn
+	if node, cluster, err := id.subject(); err == nil {
+		id.NodeID = node
+		id.ClusterID = cluster
 	}
 	return id, nil
 }
 
-func (i *Identity) commonName() (string, error) {
+// subject reads this identity's node and cluster back out of its own
+// certificate: CommonName is the node, the single OrganizationalUnit is the
+// cluster. Nothing else on disk records them, so the certificate is the
+// only place either one is persisted.
+func (i *Identity) subject() (nodeID, clusterID string, err error) {
 	blk, _ := pem.Decode(i.certPEM)
 	if blk == nil {
-		return "", fmt.Errorf("identity: certificate is not PEM")
+		return "", "", fmt.Errorf("identity: certificate is not PEM")
 	}
 	crt, err := x509.ParseCertificate(blk.Bytes)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return crt.Subject.CommonName, nil
+	if len(crt.Subject.OrganizationalUnit) == 1 {
+		clusterID = crt.Subject.OrganizationalUnit[0]
+	}
+	return crt.Subject.CommonName, clusterID, nil
 }
 
 // SaveServer persists the tunnel address enrolment resolved, so a later `run`

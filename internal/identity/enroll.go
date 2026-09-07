@@ -40,13 +40,13 @@ type Enroller struct {
 
 const enrollTimeout = 30 * time.Second
 
-// Enroll generates a key, requests a certificate for clusterID with the pairing
-// token, and returns the resulting identity. It does not write anything to
-// disk; the caller decides where an identity lives.
+// Enroll generates a key, requests a certificate for nodeID in clusterID with
+// the pairing token, and returns the resulting identity. It does not write
+// anything to disk; the caller decides where an identity lives.
 //
 // The token authenticates this one request and is deliberately not stored: it
 // is single-use, and an unused copy on disk is a credential nobody is watching.
-func (e *Enroller) Enroll(ctx context.Context, clusterID, token string) (*Identity, error) {
+func (e *Enroller) Enroll(ctx context.Context, clusterID, nodeID, token string) (*Identity, error) {
 	if token == "" {
 		return nil, fmt.Errorf("identity: enrollment needs a pairing token")
 	}
@@ -54,7 +54,7 @@ func (e *Enroller) Enroll(ctx context.Context, clusterID, token string) (*Identi
 	if err != nil {
 		return nil, err
 	}
-	csr, err := CSR(key, clusterID)
+	csr, err := CSR(key, clusterID, nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +116,7 @@ func (e *Enroller) Enroll(ctx context.Context, clusterID, token string) (*Identi
 
 	id := &Identity{
 		ClusterID: clusterID,
+		NodeID:    nodeID,
 		key:       key,
 		certPEM:   []byte(out.Certificate),
 		caPEM:     []byte(out.CA),
@@ -133,11 +134,11 @@ func (e *Enroller) Enroll(ctx context.Context, clusterID, token string) (*Identi
 // It refuses when dir already holds an identity. Re-enrolling should be a
 // deliberate act — running the command twice must not quietly invalidate the
 // certificate the SaaS is currently accepting.
-func (e *Enroller) EnrollAndSave(ctx context.Context, dir, clusterID, token string) (*Identity, error) {
+func (e *Enroller) EnrollAndSave(ctx context.Context, dir, clusterID, nodeID, token string) (*Identity, error) {
 	if Exists(dir) {
 		return nil, fmt.Errorf("%w at %s; remove it first to re-enrol", ErrAlreadyEnrolled, dir)
 	}
-	id, err := e.Enroll(ctx, clusterID, token)
+	id, err := e.Enroll(ctx, clusterID, nodeID, token)
 	if err != nil {
 		return nil, err
 	}

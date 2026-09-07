@@ -96,6 +96,7 @@ func enrollCmd(args []string) int {
 	fs := flag.NewFlagSet("enroll", flag.ContinueOnError)
 	server := fs.String("server", "", "SaaS base URL, e.g. https://advisor.bigstack.co")
 	cluster := fs.String("cluster", "", "cluster id (defaults to the hostname)")
+	node := fs.String("node", "", "node id (defaults to the hostname)")
 	dir := fs.String("dir", identity.DefaultDir, "where the identity is stored")
 	token := fs.String("token", "", "pairing token (visible in ps; prefer -token-file)")
 	tokenFile := fs.String("token-file", "", "read the pairing token from a file")
@@ -127,6 +128,12 @@ func enrollCmd(args []string) int {
 		*cluster = h
 	}
 
+	resolvedNode, err := nodeID(*node)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "enroll: %v\n", err)
+		return exitUsage
+	}
+
 	tok, err := readToken(*token, *tokenFile, *tokenStdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "enroll: %v\n", err)
@@ -137,8 +144,8 @@ func enrollCmd(args []string) int {
 	// it is never a side effect of running the command twice.
 	if identity.Exists(*dir) && !*force {
 		fmt.Fprintf(os.Stderr,
-			"enroll: %s is already enrolled (identity in %s); pass -force to replace it\n",
-			*cluster, *dir)
+			"enroll: %s is already enrolled as node %s (identity in %s); pass -force to replace it\n",
+			*cluster, resolvedNode, *dir)
 		return exitAlready
 	}
 	if *force {
@@ -152,7 +159,7 @@ func enrollCmd(args []string) int {
 	defer cancel()
 
 	e := &identity.Enroller{BaseURL: strings.TrimRight(*server, "/"), AgentVersion: version}
-	id, err := e.EnrollAndSave(ctx, *dir, *cluster, tok)
+	id, err := e.EnrollAndSave(ctx, *dir, *cluster, resolvedNode, tok)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "enroll: %v\n", err)
 		switch {
@@ -187,7 +194,7 @@ func enrollCmd(args []string) int {
 	}
 	// The fingerprint is printed because an operator compares it against the one
 	// the SaaS shows. Enrollment is not finished until a human has done that.
-	fmt.Printf("Enrolled %s\n", *cluster)
+	fmt.Printf("Enrolled %s as node %s\n", *cluster, resolvedNode)
 	fmt.Printf("Fingerprint: %s\n", fp)
 	fmt.Printf("Compare this with the fingerprint shown by the Advisor before approving.\n")
 	return exitOK
@@ -211,7 +218,7 @@ func statusCmd(args []string) int {
 		return exitFailed
 	}
 	fp, _ := id.Fingerprint()
-	fmt.Printf("Enrolled as %s\n", id.ClusterID)
+	fmt.Printf("Enrolled as %s, node %s\n", id.ClusterID, id.NodeID)
 	fmt.Printf("Fingerprint: %s\n", fp)
 	return exitOK
 }
