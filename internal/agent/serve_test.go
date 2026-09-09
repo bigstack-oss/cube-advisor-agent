@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bigstack-oss/cube-advisor-agent/internal/console"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnel"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
@@ -47,6 +48,12 @@ func (r *recorder) snapshot() []toolplane.ToolCall {
 // but everything between the SaaS's channel-open and the registry's argv
 // resolution is the production path.
 func harness(t *testing.T) (*tunnel.Session, *recorder) {
+	t.Helper()
+	return harnessWithConsole(t, nil)
+}
+
+// harnessWithConsole is harness plus a console handler, for the human plane.
+func harnessWithConsole(t *testing.T, con *console.Handler) (*tunnel.Session, *recorder) {
 	t.Helper()
 	rec := &recorder{}
 	reg, err := toolplane.New(toolplane.Allowlist, rec)
@@ -83,7 +90,7 @@ func harness(t *testing.T) (*tunnel.Session, *recorder) {
 		t.Fatalf("saas accept: %v", r.err)
 	}
 
-	srv := &Server{Tools: reg, CallTimeout: 5 * time.Second}
+	srv := &Server{Tools: reg, Console: con, CallTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ctx, agentSess) }()
 
 	t.Cleanup(func() { agentSess.Close(); r.s.Close() })
@@ -416,5 +423,117 @@ func TestServeReturnsWhenThePeerResetsTheConnection(t *testing.T) {
 	case <-errCh:
 	case <-time.After(15 * time.Second):
 		t.Fatal("Serve did not return after the peer reset the connection")
+	}
+}
+
+// --- the human plane ---------------------------------------------------------
+
+// echoSSHD is a local sshd stand-in: it upper-cases whatever it receives.
+func echoSSHD(t *testing.T) console.Dialer {
+	t.Helper()
+	return func(ctx context.Context, address string) (net.Conn, error) {
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			buf := make([]byte, 256)
+			for {
+				n, err := server.Read(buf)
+				if n > 0 {
+					_, _ = server.Write([]byte(strings.ToUpper(string(buf[:n]))))
+				}
+				if err != nil {
+					return
+				}
+			}
+		}()
+		return client, nil
+	}
+}
+
+func TestConsoleChannelReachesLocalSSHD(t *testing.T) {
+	saas, _ := harnessWithConsole(t, &console.Handler{NodeID: "sky141", Dial: echoSSHD(t)})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ch, err := saas.OpenChannel(ctx, 1, tunnelproto.ChannelConsole,
+		tunnelproto.Target{Kind: tunnelproto.TargetSSH, Name: "sky141"})
+	if err != nil {
+		t.Fatalf("open console channel: %v", err)
+	}
+	defer ch.Close()
+
+	if _, err := ch.Write([]byte("hello")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = ch.SetDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(ch, buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(buf) != "HELLO" {
+		t.Errorf("echo = %q, want HELLO", buf)
+	}
+}
+
+// The refusal must carry no node name: a SaaS that could tell "wrong node"
+// from "no sshd" could map the cluster by probing names.
+func TestConsoleChannelForAnotherNodeRefusesWithoutNamingIt(t *testing.T) {
+	saas, _ := harnessWithConsole(t, &console.Handler{NodeID: "sky141", Dial: echoSSHD(t)})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ch, err := saas.OpenChannel(ctx, 2, tunnelproto.ChannelConsole,
+		tunnelproto.Target{Kind: tunnelproto.TargetSSH, Name: "sky142"})
+	if err != nil {
+		t.Fatalf("open console channel: %v", err)
+	}
+	defer ch.Close()
+
+	_ = ch.SetDeadline(time.Now().Add(5 * time.Second))
+	body, _ := io.ReadAll(ch)
+	if strings.Contains(string(body), "sky142") || strings.Contains(string(body), "sky141") {
+		t.Errorf("refusal names a node: %q", body)
+	}
+}
+
+// An agent with no console configured must not guess which node it is.
+func TestConsoleChannelIsRefusedWhenNoConsoleIsConfigured(t *testing.T) {
+	saas, _ := harness(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ch, err := saas.OpenChannel(ctx, 3, tunnelproto.ChannelConsole,
+		tunnelproto.Target{Kind: tunnelproto.TargetSSH, Name: "sky141"})
+	if err != nil {
+		t.Fatalf("open console channel: %v", err)
+	}
+	defer ch.Close()
+
+	_ = ch.SetDeadline(time.Now().Add(5 * time.Second))
+	body, _ := io.ReadAll(ch)
+	if !strings.Contains(string(body), tunnelproto.RefusedReason) {
+		t.Errorf("body = %q, want the generic refusal", body)
+	}
+}
+
+// Acceptance criterion: the AI plane has no path to a console channel. The
+// protocol refuses a console channel that names a tool, and the tool handler
+// refuses a console channel outright — both directions, so neither package
+// can grow into the other by accident.
+func TestThePlanesCannotReachEachOther(t *testing.T) {
+	toolOnConsole := tunnelproto.ChannelOpen{
+		Kind:   tunnelproto.ChannelConsole,
+		Target: tunnelproto.Target{Kind: tunnelproto.TargetTool, Name: "cluster_check"},
+	}
+	if err := toolOnConsole.Validate(); err == nil {
+		t.Error("a console channel naming a tool validated; the AI plane has a path to the console")
+	}
+
+	consoleOnTool := tunnelproto.ChannelOpen{
+		Kind:   tunnelproto.ChannelTool,
+		Target: tunnelproto.Target{Kind: tunnelproto.TargetSSH, Name: "sky141"},
+	}
+	if err := consoleOnTool.Validate(); err == nil {
+		t.Error("a tool channel naming a node validated; a tool call could open a shell")
 	}
 }
