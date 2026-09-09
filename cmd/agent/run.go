@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bigstack-oss/cube-advisor-agent/internal/agent"
+	"github.com/bigstack-oss/cube-advisor-agent/internal/console"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnel"
@@ -118,11 +119,18 @@ func runCmd(args []string) int {
 		return sess, nil
 	}
 
-	srv := &agent.Server{Tools: reg}
+	// The console handler is constructed from the identity the agent enrolled
+	// with, never from anything the SaaS sends: the node this agent is is a
+	// fact about this process, and a node id the caller could influence is a
+	// node id a compromised SaaS could pick.
+	srv := &agent.Server{
+		Tools:   reg,
+		Console: &console.Handler{NodeID: id.NodeID},
+	}
 	backoff := tunnel.DefaultBackoff()
 	guard := tunnel.DefaultFlapGuard()
-	log.Printf("agent %s: serving %d tools for %s via %s",
-		version, len(reg.Names()), id.ClusterID, serverAddr)
+	log.Printf("agent %s: serving %d tools and a console for %s/%s via %s",
+		version, len(reg.Names()), id.ClusterID, id.NodeID, serverAddr)
 
 	// Serve until told to stop. Each session ending — network flap, SaaS
 	// restart, supersession by a newer agent — is a reason to reconnect, not
