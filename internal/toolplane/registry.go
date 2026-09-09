@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
 )
 
 // Errors a caller may distinguish. They are deliberately coarse: the SaaS is
@@ -26,6 +28,15 @@ var (
 // shape as a real failure — and neither the audit log nor an operator can
 // tell a slow cluster from a broken one.
 var ErrToolTimedOut = errors.New("toolplane: tool exceeded its time limit")
+
+// ErrRefusedAtLevel is a call this cluster's action level does not serve.
+//
+// Distinguishable from ErrBadArgument because the two mean opposite things to
+// whoever reads them: a bad argument is the caller's mistake and retrying with
+// a different value may work, while a level refusal is the cluster's policy and
+// no argument changes it. Collapsing them would have the SaaS advise the model
+// to try again at a cluster that will refuse it every time.
+var ErrRefusedAtLevel = errors.New("toolplane: refused at this cluster's action level")
 
 // ErrOutputTruncated is how a runner reports that a command emitted more than
 // the cap. Call converts it into a successful, marked result rather than a
@@ -65,10 +76,28 @@ type Registry struct {
 	// nil here is never reached at call time.
 	probes *ProbeRunner
 
+	// level is what this cluster serves (ADR 0011), read from a file on this
+	// node at construction. It is the authoritative copy: the SaaS keeps a
+	// mirror to shape what it offers the model, and where the two disagree
+	// this one refuses.
+	level Level
+
 	// datacenter is the agent's own cluster identity, filled into a Get tool's
 	// {dc}. Empty until deployment wires it, which is why an unconfigured Get
 	// tool refuses rather than reading the wrong cluster.
 	datacenter string
+
+	// profile is everything about a created instance except its name. Empty
+	// until deployment sets it, which is why an unconfigured write refuses
+	// rather than creating something the operator did not specify.
+	profile InstanceProfile
+
+	// cubeCOSWrite performs the authenticated write; nil-safe via a default
+	// that refuses, exactly as cubeCOS is for reads.
+	cubeCOSWrite CubeCOSPoster
+
+	// writes suppresses a repeat of a completed write. See writeLedger.
+	writes *writeLedger
 	// cubeCOS performs the authenticated read-only GET; nil-safe via a default
 	// that refuses, so a Get tool on an unconfigured agent is a clean refusal
 	// rather than a panic.
@@ -106,6 +135,12 @@ func New(tools []Tool, audit Auditor, opts ...Option) (*Registry, error) {
 		timeout: defaultTimeout,
 		run:     runCommand,
 		cubeCOS: notConfigured{},
+		// Fail closed before any option runs: a registry built without
+		// WithLevel serves reads, which is ADR 0011's "unset means observe"
+		// at the one place a caller could forget to say it.
+		level:        DefaultLevel,
+		cubeCOSWrite: notConfiguredPoster{},
+		writes:       newWriteLedger(),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -139,6 +174,73 @@ type Option func(*Registry)
 // that was not built for probes cannot be talked into running one.
 func WithProbes(pr *ProbeRunner) Option {
 	return func(r *Registry) { r.probes = pr }
+}
+
+// WithLevel sets the action level this agent serves.
+//
+// Deployment reads it from the node with ReadLevel and passes it here, so the
+// file is parsed once, at startup, where a malformed value can be logged
+// loudly — rather than on each call, where the same error would be a mystery
+// repeated. A registry given no level serves reads.
+func WithLevel(l Level) Option {
+	return func(r *Registry) { r.level = l }
+}
+
+// refusedByLevel reports whether the cluster's action level withholds a class.
+//
+// It asks the question only of the configuring classes, and that restriction is
+// the whole point. The classes ascend by what they touch and that ordering is
+// not a permission scale: ImpactScratch is gated by whether this agent has a
+// probe runner, decided at registration, and ImpactRead is gated by nothing.
+// Handing the level authority over all four — the shape "does this level serve
+// this impact", asked unconditionally — silently stops every probe, because no
+// level serves scratch. That regression is what this function exists to make
+// impossible to write by accident.
+func (r *Registry) refusedByLevel(i Impact) bool {
+	switch i {
+	case ImpactOperate, ImpactInternal:
+		return !r.level.Serves(i)
+	}
+	return false
+}
+
+// Level reports what this agent serves. Deployment logs it at startup; the
+// SaaS never asks, because asking would make the answer something a compromised
+// SaaS could be told.
+func (r *Registry) Level() Level { return r.level }
+
+// ConfigureInstanceProfile sets everything about a created instance except its
+// name. Called once at startup from deployment configuration; until then a
+// write refuses, so an operator who enabled the operate level but described no
+// instance gets a clean refusal rather than a surprising default.
+func (r *Registry) ConfigureInstanceProfile(p InstanceProfile) { r.profile = p }
+
+// ConfigureCubeCOSWriter wires the authenticated write client. Separate from
+// ConfigureCubeCOS so an agent can read the management API without being able
+// to write to it: an operator who wires only the reader has a plane that
+// cannot create anything, whatever its level says.
+func (r *Registry) ConfigureCubeCOSWriter(pw CubeCOSPoster) {
+	if pw != nil {
+		r.cubeCOSWrite = pw
+	}
+}
+
+// contextValues is every placeholder the executor fills from its own
+// configuration, resolved at call time so a profile set after construction is
+// picked up.
+func (r *Registry) contextValues() map[string]string {
+	v := r.profile.values()
+	v[dcPlaceholder] = r.datacenter
+	return v
+}
+
+// SetWriterForTest is ConfigureCubeCOSWriter's test-named twin, and also fixes
+// the ledger's clock so a suite can age an entry out without sleeping.
+func (r *Registry) SetWriterForTest(pw CubeCOSPoster, now func() time.Time) {
+	r.ConfigureCubeCOSWriter(pw)
+	if now != nil {
+		r.writes.now = now
+	}
 }
 
 // SetRunnerForTest replaces the executor.
@@ -191,10 +293,19 @@ func asTimeout(ctx context.Context, name string, timeout time.Duration, err erro
 	return err
 }
 
-// Names returns the registered tool names, sorted — what the agent advertises.
+// Names returns the tool names this agent will serve at its level, sorted —
+// what it advertises.
+//
+// A registered tool the level does not serve is absent here rather than listed
+// and refused: advertising a call that always fails wastes a turn and teaches
+// the model that refusals are normal. Call still refuses it, because the list
+// is advice and the check is the control.
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.tools))
-	for n := range r.tools {
+	for n, t := range r.tools {
+		if r.refusedByLevel(t.Impact) {
+			continue
+		}
 		out = append(out, n)
 	}
 	sort.Strings(out)
@@ -216,12 +327,33 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 		return nil, fmt.Errorf("%w: %q", ErrUnknownTool, name)
 	}
 
+	// The level check comes before anything the tool does, and before argument
+	// resolution: whether this cluster serves the class is a question about the
+	// cluster, and answering it first means a refused call never touches a
+	// value it was not going to use.
+	//
+	// The reason is the one refusal permitted to be specific (tunnelproto
+	// .RefusedAtLevelReason). It names no tool and no value, so it is not an
+	// oracle; it is the cluster's own policy, which its operator wrote.
+	if r.refusedByLevel(tool.Impact) {
+		r.audit.RecordToolCall(ToolCall{
+			Tool: name, Args: args, Allowed: false,
+			Reason: fmt.Sprintf("action level %s does not serve impact %s", r.level, tool.Impact),
+			At:     time.Now().UTC(),
+		})
+		return nil, fmt.Errorf("%w: %s", ErrRefusedAtLevel, tunnelproto.RefusedAtLevelReason)
+	}
+
 	if tool.Control != 0 {
 		return r.callControl(ctx, tool, args)
 	}
 
 	if tool.Get != "" {
 		return r.callGet(ctx, tool, args)
+	}
+
+	if tool.Post != "" {
+		return r.callPost(ctx, tool, args)
 	}
 
 	argv, err := tool.resolve(args)

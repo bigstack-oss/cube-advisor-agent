@@ -58,23 +58,26 @@ func TestShippedAllowlistRegisters(t *testing.T) {
 	}
 }
 
-// The plane is read-only by construction. Adding a configuring tool has to be
-// deliberate, and even then registration refuses it — at both classes, so that
-// splitting the old single mutating class did not quietly open one of them.
-func TestAToolThatIsNotReadOnlyCannotRegister(t *testing.T) {
+// A configuring tool registers — it is a well-formed tool — and then the
+// cluster's own action level decides. At the default level nothing configuring
+// is served, so a registry that was never told a level behaves exactly as the
+// read-only plane did: it advertises no configuring tool and refuses any call
+// to one. Both classes, so that splitting the old single mutating class did not
+// quietly open one of them.
+func TestNoConfiguringToolIsServedAtTheDefaultLevel(t *testing.T) {
 	for _, impact := range []Impact{ImpactOperate, ImpactInternal} {
-		_, err := New([]Tool{{
+		r, err := New([]Tool{{
 			Name: "restart_thing", Argv: []string{"systemctl", "restart", "thing"},
 			Impact: impact,
 		}}, &recorder{})
-		if err == nil {
-			t.Fatalf("a tool declaring impact %s was registered", impact)
+		if err != nil {
+			t.Fatalf("a well-formed tool of impact %s should register: %v", impact, err)
 		}
-		if !strings.Contains(err.Error(), "no configuring class") {
-			t.Errorf("error for impact %s should say why: %v", impact, err)
+		if got := r.Names(); len(got) != 0 {
+			t.Errorf("impact %s advertised at the default level: %v", impact, got)
 		}
-		if !strings.Contains(err.Error(), impact.String()) {
-			t.Errorf("error should name the class %s: %v", impact, err)
+		if _, err := r.Call(context.Background(), "restart_thing", nil); !errors.Is(err, ErrRefusedAtLevel) {
+			t.Errorf("call of impact %s: err = %v, want ErrRefusedAtLevel", impact, err)
 		}
 	}
 	// An impact from a newer build is refused too, and says something
@@ -285,8 +288,22 @@ func TestNamesAreAdvertisedSorted(t *testing.T) {
 			t.Fatalf("Names not sorted: %v", got)
 		}
 	}
-	if len(got) != len(Allowlist) {
-		t.Errorf("advertised %d tools, allowlist has %d", len(got), len(Allowlist))
+	// Not len(Allowlist): the test registry is at the default level, which
+	// serves no configuring class, so the shipped write is registered and
+	// deliberately not advertised.
+	served := 0
+	for _, tool := range Allowlist {
+		if tool.Impact == ImpactRead {
+			served++
+		}
+	}
+	if len(got) != served {
+		t.Errorf("advertised %d tools, %d of the allowlist are served at this level", len(got), served)
+	}
+	for _, n := range got {
+		if n == "create_instance" {
+			t.Error("a configuring tool was advertised at the default level")
+		}
 	}
 }
 

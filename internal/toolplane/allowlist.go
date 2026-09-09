@@ -1,12 +1,12 @@
-// Package toolplane serves the AI plane: today, read-only tools the SaaS may
-// invoke over a tool channel.
+// Package toolplane serves the AI plane: the tools the SaaS may invoke over a
+// tool channel, bounded by what this cluster said it allows.
 //
-// "Read-only" is the current state rather than a permanent property. ADR 0011
-// gives each cluster an action level — observe / operate / internal — that
-// decides which impact classes this side will serve, and the classes it will
-// admit are already named below. Until a later slice reads that level, every
-// configuring class is refused here, so the read-only description is accurate
-// for what ships and wrong for what the package is becoming.
+// What it allows is a word in a file on this node (ADR 0011): observe serves
+// reads, operate adds tools that change the cluster through a supported
+// end-user interface, internal adds tools that reach past those. Unset means
+// observe, so a cluster whose operator has said nothing serves reads only —
+// which is every cluster until someone writes the file. The level is read at
+// startup and applied to every call, and Names advertises only what it serves.
 //
 // The allowlist below is enforced here, on the customer's cluster, and is the
 // single artifact a security review needs to read. The SaaS validating a
@@ -15,16 +15,23 @@
 // exists to survive. That stays true when levels arrive: the authoritative
 // level is the one on this node, and where the two disagree this side wins.
 //
-// Three properties hold together to bound the blast radius to "read health and
-// logs":
+// Five properties hold together to bound what a call can do:
 //
 //  1. Lookup is exact match. An unknown name is refused, never fuzzily resolved.
-//  2. A tool declares the exact argv it runs; arguments are substituted only
-//     into declared slots, and only from a declared value set. There is no
-//     shell, so metacharacters are inert rather than filtered — filtering is a
-//     blocklist, and blocklists are how these things go wrong.
-//  3. Every call, allowed or refused, is written to a local append-only log the
-//     customer can read.
+//  2. A tool declares the exact argv it runs, or the exact path and body it
+//     sends; arguments are substituted only into declared slots, and only from
+//     a declared value set — or, where a value cannot be enumerated, a declared
+//     Shape. There is no shell, so metacharacters are inert rather than
+//     filtered — filtering is a blocklist, and blocklists are how these things
+//     go wrong.
+//  3. The cluster's own action level decides which impact classes are served,
+//     and it is read from this node. The SaaS keeps a mirror to shape what it
+//     offers the model; where the two disagree this side refuses.
+//  4. A write cannot be repeated by a retry: an identical request inside a
+//     short window is recognised by what it would do and answered from the
+//     first one. A read costs nothing to repeat; a create costs an instance.
+//  5. Every call — allowed, refused or suppressed as a replay — is written to a
+//     local append-only log the customer can read.
 package toolplane
 
 import (
@@ -83,6 +90,77 @@ func (i Impact) String() string {
 		return "internal"
 	}
 	return fmt.Sprintf("impact(%d)", int(i))
+}
+
+// Shape names a finite grammar for a parameter whose values cannot be
+// enumerated in advance.
+//
+// A finite value set (Params) is the strong form and stays the default: the
+// allowlist says every value a tool may be given, and a reviewer reads them.
+// Creating a resource breaks that, because a name is chosen by the person
+// asking and no list written today contains it.
+//
+// The answer is a *closed vocabulary of shapes*, not a pattern field. A pattern
+// field would let a future entry write ".*", which is precisely the wildcard
+// Params already refuses as a bug; a shape cannot express a wildcard unless
+// someone adds one to this file, and adding one is the reviewable act. Each
+// shape is defined once, tested once, and named at the call site, so the
+// question a reviewer asks stays "which shape?" and never "what does this
+// regexp admit?".
+//
+// Every shape must, at minimum: reject the empty string, bound the length,
+// exclude shell metacharacters (inert here, since there is no shell, but a
+// value that leaves this process may reach one), exclude "/" and "." so a value
+// cannot compose a path segment or escape one, and reject a leading "-" so a
+// value cannot be read as a flag by the program it is passed to. That last one
+// is the argument-injection case, and a finite value set made it impossible for
+// free.
+type Shape int
+
+const (
+	// ShapeDNSLabel is a single DNS label: lowercase letters, digits and
+	// interior hyphens, 1-63 characters, starting and ending alphanumeric.
+	// OpenStack, Kubernetes and DNS all accept it as a name, so a value this
+	// shape admits is one every layer downstream can hold.
+	ShapeDNSLabel Shape = iota + 1
+)
+
+func (s Shape) String() string {
+	switch s {
+	case ShapeDNSLabel:
+		return "dns-label"
+	}
+	return fmt.Sprintf("shape(%d)", int(s))
+}
+
+// maxDNSLabel is the DNS limit, and doubles as the length bound.
+const maxDNSLabel = 63
+
+// admits reports whether v satisfies the shape.
+//
+// Written as explicit character classes rather than a compiled regexp, so the
+// grammar is readable in the same file as the rule it enforces and there is no
+// pattern string a later edit could quietly widen.
+func (s Shape) admits(v string) bool {
+	switch s {
+	case ShapeDNSLabel:
+		if v == "" || len(v) > maxDNSLabel {
+			return false
+		}
+		for i := 0; i < len(v); i++ {
+			c := v[i]
+			switch {
+			case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+			case c == '-' && i > 0 && i < len(v)-1:
+			default:
+				return false
+			}
+		}
+		return true
+	}
+	// A shape this build does not know admits nothing, for the same reason an
+	// unrecognised impact is refused: absence of a rule is not permission.
+	return false
 }
 
 // ControlOp identifies a built-in probe-plane operation. Like Impact it starts
@@ -145,19 +223,46 @@ type Tool struct {
 	// be declared in Params, exactly like Argv.
 	Get string
 
-	// Params declares each placeholder in Argv or Get and the finite set of
-	// values it accepts. A parameter with no declared values is a bug, not a
-	// wildcard: Register rejects it. {dc} is never declared here — it is
-	// executor context, not a caller argument.
+	// Post is a cube-cos-api path template for a request that changes the
+	// cluster, e.g. "/api/v1/datacenters/{dc}/instances". Body carries what is
+	// sent. It exists because ADR 0011's operate level needs a write path and
+	// Get is structurally GET-only; every guard that made Get safe is restated
+	// for it, and two are added — a body whose every field is declared here,
+	// and an idempotency key, because a repeated read is free and a repeated
+	// create is not.
+	//
+	// Exactly one of Argv, Get, Post or Control is set.
+	Post string
+
+	// Body is the JSON object sent with Post: a field name to either a literal
+	// or a placeholder declared in Params or Free. There is no free-form body
+	// and no pass-through of caller JSON, so the request this allowlist
+	// performs is fully described by this file — the same property Argv has for
+	// a command.
+	Body map[string]string
+
+	// Params declares each placeholder in Argv, Get, Post or Body and the
+	// finite set of values it accepts. A parameter with no declared values is a
+	// bug, not a wildcard: Register rejects it. {dc} is never declared here —
+	// it is executor context, not a caller argument.
 	Params map[string][]string
 
-	// Impact declares what this tool does to the cluster. It must be
-	// ImpactRead today, or ImpactScratch where a probe plane is wired;
-	// Register refuses every other class, and refuses the zero value too, so
-	// a tool that declares nothing is not served. The AI plane has no write
-	// path, and gaining one should take a deliberate edit here and a cluster
-	// that asked for it — ADR 0011 — rather than a field somebody filled in
-	// differently.
+	// Free declares the placeholders whose values cannot be enumerated, each
+	// with the Shape it must satisfy. A placeholder belongs to Params or to
+	// Free, never both: one says "these values", the other "this grammar", and
+	// a placeholder in both would leave a reviewer unsure which was checked.
+	//
+	// Keep this map small. Every entry is a value a reviewer can no longer read
+	// in the allowlist, and the shape is all that stands between the caller and
+	// the program.
+	Free map[string]Shape
+
+	// Impact declares what this tool does to the cluster, and the cluster's
+	// action level decides whether that class is served (ADR 0011). Register
+	// still refuses the zero value and any class this build cannot name, so a
+	// tool that declares nothing is never served; what changed is that a
+	// configuring class is now refused by the level at call time rather than
+	// refused outright, and the level comes from a file on this node.
 	Impact Impact
 
 	// MaxOutputBytes caps what a single call may return. Zero means the
@@ -255,6 +360,48 @@ var Allowlist = []Tool{
 		Get:         "/api/v1/datacenters/{dc}/events",
 		Impact:      ImpactRead,
 	},
+	// The first entry that changes the cluster (ADR 0011, slice 3). Served
+	// only where the node's action-level file says operate or internal; every
+	// cluster refuses it until someone writes that file.
+	//
+	// The caller chooses one thing: the name. Flavour, image, network and
+	// project come from the instance profile the cluster's operator configured,
+	// filled here the way {dc} always has been — so the widest choice the SaaS
+	// can make is a 63-character DNS label, and how much quota the instance
+	// spends and what code it runs are the customer's decisions, made in
+	// advance and not per call.
+	//
+	// The path and body field names must be confirmed against the running
+	// cube-cos-api's OpenAPI document before this is enabled on a real cluster.
+	// Nothing here can act until an operator both raises a level and wires a
+	// writer, so shipping the mechanism ahead of that confirmation costs
+	// nothing; taking it on trust when the level is first raised would not.
+	{
+		Name: "create_instance",
+		Description: "Create one virtual machine from this cluster's configured instance profile. " +
+			"The caller chooses only the name.",
+		Post: "/api/v1/datacenters/{dc}/instances",
+		Body: map[string]string{
+			"name":    "{name}",
+			"flavor":  "{flavor}",
+			"image":   "{image}",
+			"network": "{network}",
+			"project": "{project}",
+		},
+		Free: map[string]Shape{
+			// The one value the allowlist cannot enumerate. A DNS label
+			// cannot begin with "-", so it cannot be read as a flag; it
+			// contains no "/" or ".", so it cannot compose or escape a path
+			// segment; and it holds no shell metacharacter, which matters
+			// not here — there is no shell — but downstream, where there
+			// may be one.
+			"{name}": ShapeDNSLabel,
+		},
+		Impact: ImpactOperate,
+		// A create returns as soon as the API has accepted it; the instance
+		// boots afterwards. This bounds the acceptance, not the boot.
+		Timeout: 60 * time.Second,
+	},
 }
 
 // ProbeControls is the probe plane's half of the allowlist, kept separate
@@ -289,10 +436,6 @@ var ProbeControls = []Tool{
 	},
 }
 
-// dcPlaceholder is the one placeholder the executor fills from its own config
-// rather than from a caller argument: the agent's datacenter.
-const dcPlaceholder = "{dc}"
-
 // validate checks a tool is well-formed for registration.
 //
 // probes reports whether this executor has a probe runner wired. Without one,
@@ -310,11 +453,13 @@ func (t Tool) validate(probes bool) error {
 			return fmt.Errorf("tool %q declares impact scratch but this agent has no probe plane", t.Name)
 		}
 	case ImpactOperate, ImpactInternal:
-		// Named rather than left to the default so the log distinguishes a
-		// class this agent knows and will not serve from one it has never
-		// heard of. When action levels arrive, this is the branch that
-		// consults the level file; until then the answer is always no.
-		return fmt.Errorf("tool %q declares impact %s; this agent serves no configuring class at any level yet", t.Name, t.Impact)
+		// Well-formed, and not necessarily served. Registration is about the
+		// tool; the cluster's action level is about this cluster, is read from
+		// a file on this node, and is applied in Call — so a level raised or
+		// lowered after startup takes effect without a restart, and a call the
+		// level refuses is refused legibly rather than reported as an unknown
+		// tool. Names() hides what the level does not serve, so an agent still
+		// advertises only what it will do.
 	default:
 		return fmt.Errorf("tool %q declares impact %s; the AI plane serves reads and probes only", t.Name, t.Impact)
 	}
@@ -322,22 +467,80 @@ func (t Tool) validate(probes bool) error {
 		return fmt.Errorf("tool %q has a negative timeout", t.Name)
 	}
 	kinds := 0
-	for _, set := range []bool{len(t.Argv) > 0, t.Get != "", t.Control != 0} {
+	for _, set := range []bool{len(t.Argv) > 0, t.Get != "", t.Post != "", t.Control != 0} {
 		if set {
 			kinds++
 		}
 	}
 	if kinds != 1 {
-		return fmt.Errorf("tool %q must be exactly one of a command (Argv), a cube-cos-api read (Get) or a probe-plane control (Control)", t.Name)
+		return fmt.Errorf("tool %q must be exactly one of a command (Argv), a cube-cos-api read (Get), a cube-cos-api write (Post) or a probe-plane control (Control)", t.Name)
+	}
+	// A placeholder is either enumerated or shaped, never both: two answers to
+	// "what may this value be" is the same as none.
+	for ph := range t.Free {
+		if _, dup := t.Params[ph]; dup {
+			return fmt.Errorf("tool %q declares %s in both Params and Free; a placeholder has one rule", t.Name, ph)
+		}
+		if t.Free[ph] == 0 {
+			return fmt.Errorf("tool %q declares %s with no shape; an unshaped free parameter is a wildcard", t.Name, ph)
+		}
+		if t.Free[ph].String() == fmt.Sprintf("shape(%d)", int(t.Free[ph])) {
+			return fmt.Errorf("tool %q declares %s with a shape this build does not know", t.Name, ph)
+		}
+	}
+	// A read may be shaped too, but nothing needs it yet, and a free parameter
+	// on a read is a widening nobody asked for. Refused until a tool wants it,
+	// so the surface grows deliberately rather than by inheritance.
+	if len(t.Free) > 0 && t.Post == "" {
+		return fmt.Errorf("tool %q declares free parameters but is not a write; only a write path admits an unenumerable value today", t.Name)
 	}
 	switch {
 	case t.Control != 0:
 		return t.validateControl()
 	case t.Get != "":
 		return t.validateGet()
+	case t.Post != "":
+		return t.validatePost()
 	default:
 		return t.validateCommand()
 	}
+}
+
+// validatePost checks a cube-cos-api write entry.
+//
+// Everything validateGet requires of a path, plus the body. A write is refused
+// unless it declares one: a POST with no body is either a read wearing the
+// wrong method or an action whose effect is invisible in this file, and both
+// should be written differently.
+func (t Tool) validatePost() error {
+	if !strings.HasPrefix(t.Post, "/") {
+		return fmt.Errorf("tool %q POST path must be absolute", t.Name)
+	}
+	// Declaring an executor-filled placeholder as a caller argument is how it
+	// would stop being executor context, so it is a registration error rather
+	// than something resolveWrite quietly ignores.
+	for ph := range executorFilled {
+		if _, declared := t.Params[ph]; declared {
+			return fmt.Errorf("tool %q declares %s; it is executor context, not a parameter", t.Name, ph)
+		}
+		if _, declared := t.Free[ph]; declared {
+			return fmt.Errorf("tool %q declares %s as a free parameter; it is executor context, and the caller must not choose it", t.Name, ph)
+		}
+	}
+	if len(t.Body) == 0 {
+		return fmt.Errorf("tool %q is a write and declares no body; what it sends must be visible here", t.Name)
+	}
+	if t.Impact == ImpactRead {
+		return fmt.Errorf("tool %q writes to the management API but declares impact read", t.Name)
+	}
+	tokens := pathSegments(t.Post)
+	for field, v := range t.Body {
+		if field == "" {
+			return fmt.Errorf("tool %q declares a body field with no name", t.Name)
+		}
+		tokens = append(tokens, v)
+	}
+	return t.checkPlaceholders(tokens, executorFilled)
 }
 
 // validateControl checks a probe-plane control entry.
@@ -354,6 +557,12 @@ func (t Tool) validateControl() error {
 	if t.Control != ControlProbeStart && t.Control != ControlProbeStatus {
 		return fmt.Errorf("tool %q declares an unknown control operation", t.Name)
 	}
+	// The probe plane creates and destroys its own scratch resources and
+	// changes no configuration; a control tool claiming a configuring class is
+	// claiming to be something the probe runner cannot do.
+	if t.Impact != ImpactRead && t.Impact != ImpactScratch {
+		return fmt.Errorf("tool %q is a probe-plane control but declares impact %s; the probe plane changes no configuration", t.Name, t.Impact)
+	}
 	return nil
 }
 
@@ -369,6 +578,14 @@ func (t Tool) validateCommand() error {
 func (t Tool) validateGet() error {
 	if !strings.HasPrefix(t.Get, "/") {
 		return fmt.Errorf("tool %q GET path must be absolute", t.Name)
+	}
+	// A GET changes nothing, so a configuring class on one is a mis-declaration
+	// rather than a policy question, and a cluster at the internal level would
+	// otherwise serve it as though it changed something. Refused at
+	// registration, where the contradiction is between two fields of the same
+	// entry and a reviewer can see both.
+	if t.Impact != ImpactRead {
+		return fmt.Errorf("tool %q is a cube-cos-api read but declares impact %s; a GET changes nothing", t.Name, t.Impact)
 	}
 	// {dc} is executor context, not a caller argument: it may appear in the
 	// path without a Params declaration, and it must not be declared as one.
@@ -390,7 +607,9 @@ func (t Tool) checkPlaceholders(tokens []string, exempt map[string]bool) error {
 		if exempt[tok] {
 			continue
 		}
-		if _, ok := t.Params[tok]; !ok {
+		_, enumerated := t.Params[tok]
+		_, shaped := t.Free[tok]
+		if !enumerated && !shaped {
 			return fmt.Errorf("tool %q uses %s but does not declare it", t.Name, tok)
 		}
 		seen[tok] = true
@@ -401,6 +620,11 @@ func (t Tool) checkPlaceholders(tokens []string, exempt map[string]bool) error {
 		}
 		if len(values) == 0 {
 			return fmt.Errorf("tool %q declares %s with no permitted values; a parameter is not a wildcard", t.Name, p)
+		}
+	}
+	for p := range t.Free {
+		if !seen[p] {
+			return fmt.Errorf("tool %q declares %s but never uses it", t.Name, p)
 		}
 	}
 	return nil

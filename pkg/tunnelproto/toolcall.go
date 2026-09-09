@@ -37,8 +37,32 @@ type ToolResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// RefusedAtLevelReason is the one refusal that is allowed to say why.
+//
+// A cluster's action level (ADR 0011) is policy its own operator wrote into a
+// file on the node, not a fact about the allowlist. Saying "this cluster does
+// not serve tools that change it" tells a caller nothing it could not read on
+// the cluster itself, and names no tool, no argument and no value set — so the
+// oracle argument behind RefusedReason does not reach it. Withholding it costs
+// something real instead: an operator who raised a level on the wrong cluster,
+// or a SaaS whose mirror is stale, sees a bare "refused" and cannot tell a
+// policy decision from a broken tool.
+//
+// This is the only exception, and it stays one by being a distinct constant
+// rather than a format string: there is no room in it for a name or a value.
+const RefusedAtLevelReason = "refused: this cluster's action level does not serve tools that change it"
+
 // Refused builds the one refusal every rejected call returns.
 func Refused() ToolResult { return ToolResult{OK: false, Error: RefusedReason} }
+
+// RefusedAtLevel builds the refusal for a call the cluster's action level does
+// not serve. Both repositories import this package, so the string the executor
+// writes and the string the SaaS recognises are one definition rather than two
+// that happen to agree — the failure that let cube-ai-advisor#121 and
+// cube-advisor-agent#24 both pass while disagreeing about a frame.
+func RefusedAtLevel() ToolResult {
+	return ToolResult{OK: false, Error: RefusedAtLevelReason}
+}
 
 // WriteToolArgs writes the argument frame: one newline-terminated JSON object.
 //

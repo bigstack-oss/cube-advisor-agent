@@ -82,11 +82,26 @@ func runCmd(args []string) int {
 		}
 		opts = append(opts, toolplane.WithProbes(probeRunner))
 	}
+	// The cluster's own action level (ADR 0011), read once here so a malformed
+	// value is one loud line at startup rather than a mystery repeated per
+	// call. A missing or empty file is not an error and means observe; a word
+	// that is not a level is an error, and the agent still starts — at observe,
+	// serving reads — because refusing to run would take diagnosis away from
+	// the operator at exactly the moment they need it.
+	level, err := toolplane.ReadLevel(*dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v; serving %s until it is corrected\n", err, level)
+	}
+	opts = append(opts, toolplane.WithLevel(level))
+
 	reg, err := toolplane.New(toolplane.Allowlist, auditor, opts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return exitFailed
 	}
+	// Stated at startup, because "what may this assistant do here" is the
+	// question an operator asks of a log and should not have to infer.
+	fmt.Fprintf(os.Stderr, "run: action level %s; serving %d tool(s)\n", level, len(reg.Names()))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
