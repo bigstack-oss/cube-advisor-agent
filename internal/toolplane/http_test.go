@@ -160,9 +160,11 @@ func TestAToolCannotBeBothCommandAndGet(t *testing.T) {
 }
 
 func TestAGetToolStillMustBeReadOnly(t *testing.T) {
-	_, err := New([]Tool{{Name: "w", Get: "/x", Impact: ImpactMutate}}, &recorder{})
-	if err == nil {
-		t.Error("a Get tool declaring a mutating impact registered")
+	for _, impact := range []Impact{ImpactOperate, ImpactInternal} {
+		_, err := New([]Tool{{Name: "w", Get: "/x", Impact: impact}}, &recorder{})
+		if err == nil {
+			t.Errorf("a Get tool declaring impact %s registered", impact)
+		}
 	}
 }
 

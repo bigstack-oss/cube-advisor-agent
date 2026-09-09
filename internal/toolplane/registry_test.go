@@ -58,15 +58,32 @@ func TestShippedAllowlistRegisters(t *testing.T) {
 	}
 }
 
-// The plane is read-only by construction. Adding a mutating tool has to be
-// deliberate, and even then registration refuses it.
+// The plane is read-only by construction. Adding a configuring tool has to be
+// deliberate, and even then registration refuses it — at both classes, so that
+// splitting the old single mutating class did not quietly open one of them.
 func TestAToolThatIsNotReadOnlyCannotRegister(t *testing.T) {
+	for _, impact := range []Impact{ImpactOperate, ImpactInternal} {
+		_, err := New([]Tool{{
+			Name: "restart_thing", Argv: []string{"systemctl", "restart", "thing"},
+			Impact: impact,
+		}}, &recorder{})
+		if err == nil {
+			t.Fatalf("a tool declaring impact %s was registered", impact)
+		}
+		if !strings.Contains(err.Error(), "no configuring class") {
+			t.Errorf("error for impact %s should say why: %v", impact, err)
+		}
+		if !strings.Contains(err.Error(), impact.String()) {
+			t.Errorf("error should name the class %s: %v", impact, err)
+		}
+	}
+	// An impact from a newer build is refused too, and says something
+	// different: unrecognised is not the same as known-and-withheld.
 	_, err := New([]Tool{{
-		Name: "restart_thing", Argv: []string{"systemctl", "restart", "thing"},
-		Impact: ImpactMutate,
+		Name: "from_the_future", Argv: []string{"true"}, Impact: Impact(99),
 	}}, &recorder{})
 	if err == nil {
-		t.Fatal("a tool declaring a mutating impact was registered")
+		t.Fatal("a tool declaring an unknown impact was registered")
 	}
 	if !strings.Contains(err.Error(), "reads and probes only") {
 		t.Errorf("error should say why: %v", err)

@@ -1,11 +1,19 @@
-// Package toolplane serves the AI plane: read-only tools the SaaS may invoke
-// over a tool channel.
+// Package toolplane serves the AI plane: today, read-only tools the SaaS may
+// invoke over a tool channel.
+//
+// "Read-only" is the current state rather than a permanent property. ADR 0011
+// gives each cluster an action level — observe / operate / internal — that
+// decides which impact classes this side will serve, and the classes it will
+// admit are already named below. Until a later slice reads that level, every
+// configuring class is refused here, so the read-only description is accurate
+// for what ships and wrong for what the package is becoming.
 //
 // The allowlist below is enforced here, on the customer's cluster, and is the
 // single artifact a security review needs to read. The SaaS validating a
 // request first is a courtesy; this package refuses regardless of what the SaaS
 // claims, because a compromised or prompt-injected SaaS is exactly the case it
-// exists to survive.
+// exists to survive. That stays true when levels arrive: the authoritative
+// level is the one on this node, and where the two disagree this side wins.
 //
 // Three properties hold together to bound the blast radius to "read health and
 // logs":
@@ -33,6 +41,11 @@ import (
 // The classes start at 1 so the zero value means "undeclared" and is refused —
 // the boolean this replaced also refused its own zero value, and that property
 // is what makes forgetting the field safe.
+//
+// The vocabulary is kept in step with the SaaS by hand, not by a shared type:
+// nothing on the wire carries an impact, so there is no contract to check
+// against. Changing a class here means changing cube-ai-advisor
+// internal/tools/tools.go too, and the reverse.
 type Impact int
 
 const (
@@ -43,9 +56,17 @@ const (
 	// generates load, while touching no configuration — the probe class.
 	// No tool declares it yet and Register refuses it until one does.
 	ImpactScratch
-	// ImpactMutate changes cluster configuration. Never served, in any
-	// phase. The class exists so the refusal is written down.
-	ImpactMutate
+	// ImpactOperate changes the cluster through an interface a supported
+	// end-user path already exposes — the UI, the public API, or hex_cli.
+	// Never served today; ADR 0011's per-cluster action level is what will
+	// admit it, and that level is read from this node, not from the SaaS.
+	ImpactOperate
+	// ImpactInternal changes the cluster by reaching past those interfaces —
+	// hex_sdk, a config file, a service internal. Never served today, and
+	// the last class to be admitted. It does not mean free-form execution:
+	// an allowlisted argv reaching an internal path is expressible here, a
+	// caller-supplied command is not, and that stays true at every level.
+	ImpactInternal
 )
 
 func (i Impact) String() string {
@@ -56,8 +77,10 @@ func (i Impact) String() string {
 		return "read"
 	case ImpactScratch:
 		return "scratch"
-	case ImpactMutate:
-		return "mutate"
+	case ImpactOperate:
+		return "operate"
+	case ImpactInternal:
+		return "internal"
 	}
 	return fmt.Sprintf("impact(%d)", int(i))
 }
@@ -129,10 +152,12 @@ type Tool struct {
 	Params map[string][]string
 
 	// Impact declares what this tool does to the cluster. It must be
-	// ImpactRead today; Register refuses everything else, and refuses the
-	// zero value too, so a tool that declares nothing is not served. The
-	// AI plane has no write path, and that should be hard to change by
-	// accident.
+	// ImpactRead today, or ImpactScratch where a probe plane is wired;
+	// Register refuses every other class, and refuses the zero value too, so
+	// a tool that declares nothing is not served. The AI plane has no write
+	// path, and gaining one should take a deliberate edit here and a cluster
+	// that asked for it — ADR 0011 — rather than a field somebody filled in
+	// differently.
 	Impact Impact
 
 	// MaxOutputBytes caps what a single call may return. Zero means the
@@ -284,6 +309,12 @@ func (t Tool) validate(probes bool) error {
 		if !probes {
 			return fmt.Errorf("tool %q declares impact scratch but this agent has no probe plane", t.Name)
 		}
+	case ImpactOperate, ImpactInternal:
+		// Named rather than left to the default so the log distinguishes a
+		// class this agent knows and will not serve from one it has never
+		// heard of. When action levels arrive, this is the branch that
+		// consults the level file; until then the answer is always no.
+		return fmt.Errorf("tool %q declares impact %s; this agent serves no configuring class at any level yet", t.Name, t.Impact)
 	default:
 		return fmt.Errorf("tool %q declares impact %s; the AI plane serves reads and probes only", t.Name, t.Impact)
 	}
