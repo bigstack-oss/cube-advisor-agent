@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bigstack-oss/cube-advisor-agent/internal/console"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnel"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
@@ -28,6 +29,11 @@ import (
 // Server serves channels for one session.
 type Server struct {
 	Tools *toolplane.Registry
+
+	// Console serves the human plane. Nil refuses every console channel,
+	// which is the right default: an agent with no node identity configured
+	// must not guess which node it is.
+	Console *console.Handler
 
 	// CallTimeout bounds one tool call end to end. Zero uses the default.
 	CallTimeout time.Duration
@@ -102,12 +108,33 @@ func (s *Server) handle(ctx context.Context, ch *tunnel.Channel) {
 	switch ch.Open.Kind {
 	case tunnelproto.ChannelTool:
 		s.serveTool(ctx, ch)
+	case tunnelproto.ChannelConsole:
+		s.serveConsole(ctx, ch)
 	default:
-		// Console channels are not served here. The protocol already prevents a
-		// tool channel from naming a console target; this refuses the converse
-		// so the tool handler can never grow into a console one by accident.
-		log.Printf("agent: tool handler refusing a %s channel", ch.Open.Kind)
+		log.Printf("agent: refusing a %s channel", ch.Open.Kind)
 		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
+	}
+}
+
+// serveConsole pipes a console channel to this node's own sshd.
+//
+// Every refusal returns the same generic reason. The distinctions — wrong
+// node, no sshd, console not configured — are logged here, on the node, and
+// never sent: a SaaS that could tell them apart could map the cluster by
+// asking for names and watching which answer differently.
+func (s *Server) serveConsole(ctx context.Context, ch *tunnel.Channel) {
+	if ch.Open.Target.Kind != tunnelproto.TargetSSH {
+		log.Printf("agent: console channel refused, target kind %q", ch.Open.Target.Kind)
+		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
+		return
+	}
+	if s.Console == nil {
+		log.Printf("agent: console channel refused, no console handler configured")
+		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
+		return
+	}
+	if err := s.Console.Serve(ctx, ch.Open.Target.Name, ch); err != nil {
+		log.Printf("agent: console channel for %q ended: %v", ch.Open.Target.Name, err)
 	}
 }
 
