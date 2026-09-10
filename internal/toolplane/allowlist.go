@@ -163,6 +163,45 @@ func (s Shape) admits(v string) bool {
 	return false
 }
 
+// Backend names the API a Get or Post is addressed to.
+//
+// It exists because a cluster's resources do not all live behind one API.
+// cube-cos-api serves the appliance — nodes, health, events, images, volumes —
+// and knows nothing of virtual machines, which are nova's. A tool therefore has
+// to say where it is going, and the executor has to hold one client per
+// destination.
+//
+// The zero value is cube-cos-api, so every tool written before this existed
+// keeps its destination without restating it, and a new tool that forgets to
+// say lands on the management API rather than somewhere it could create
+// something.
+//
+// Deliberately a small enum rather than an interface. There are two
+// destinations today and a third is foreseen — k8s clusters are Rancher's —
+// but an abstraction designed against one real case and two imagined ones is
+// worse than a second concrete case later. What this must not do is bake "a
+// write means nova" into anything shared; naming the field for the role rather
+// than for one of its occupants is how it avoids that.
+type Backend int
+
+const (
+	// BackendCubeCOS is the local cube-cos-api. The zero value, so it is what
+	// a tool gets by saying nothing.
+	BackendCubeCOS Backend = iota
+	// BackendOpenStackCompute is nova, reached through the Keystone catalog.
+	BackendOpenStackCompute
+)
+
+func (b Backend) String() string {
+	switch b {
+	case BackendCubeCOS:
+		return "cube-cos-api"
+	case BackendOpenStackCompute:
+		return "openstack-compute"
+	}
+	return fmt.Sprintf("backend(%d)", int(b))
+}
+
 // ControlOp identifies a built-in probe-plane operation. Like Impact it starts
 // at 1, so a tool that sets nothing is not accidentally a control tool.
 type ControlOp int
@@ -212,7 +251,11 @@ type Tool struct {
 	// Exactly one of Argv, Get or Control is set.
 	Control ControlOp
 
-	// Get is a cube-cos-api path template for a read-only HTTP GET, e.g.
+	// Backend is the API that Get or Post addresses. The zero value is
+	// cube-cos-api, so only a tool that goes elsewhere has to say so.
+	Backend Backend
+
+	// Get is a path template for a read-only HTTP GET against Backend, e.g.
 	// "/api/v1/datacenters/{dc}/healths". The method is GET, always — there is
 	// no field to make it anything else, so a write to the management API is
 	// not expressible in this allowlist.
@@ -394,13 +437,30 @@ var Allowlist = []Tool{
 		Name: "create_instance",
 		Description: "Create one virtual machine from this cluster's configured instance profile. " +
 			"The caller chooses only the name.",
-		Post: "/api/v1/datacenters/{dc}/instances",
+		// Instances are nova's, not cube-cos-api's: that API serves the
+		// appliance and has no VM lifecycle at all (cube-advisor-agent#33).
+		// The path is nova's own, relative to the compute service — the base
+		// URL comes from the Keystone catalog at call time, so no host, port
+		// or project id is written here and none can drift out of date.
+		Backend: BackendOpenStackCompute,
+		Post:    "/servers",
+		// The canonical fields, not nova's wire shape. nova wants them nested
+		// under "server", with flavorRef and imageRef, and networks as a list
+		// of objects; that translation is the compute backend's job, in
+		// novaServerBody. Keeping this map flat is what stops Body needing to
+		// express nested JSON — a capability the allowlist is safer without,
+		// since the whole point of this file is that the request it makes is
+		// fully described by it.
+		//
+		// project is absent, and its absence is the control: in nova a
+		// server is created in whatever project the credential is scoped to.
+		// There is no project field to get wrong, and no way to name another
+		// tenant's project, because naming is not how it is chosen.
 		Body: map[string]string{
 			"name":    "{name}",
 			"flavor":  "{flavor}",
 			"image":   "{image}",
 			"network": "{network}",
-			"project": "{project}",
 		},
 		Free: map[string]Shape{
 			// The one value the allowlist cannot enumerate. A DNS label

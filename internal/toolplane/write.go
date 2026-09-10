@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -12,15 +11,21 @@ import (
 	"time"
 )
 
-// CubeCOSPoster performs an authenticated write against the local
-// cube-cos-api. Like CubeCOSGetter it owns the base URL, the node token and
-// the TLS trust, so none of those reach this package or its audit log.
+// Poster performs an authenticated write against one backend. Like
+// CubeCOSGetter it owns the base URL, the credential and the TLS trust, so
+// none of those reach this package or its audit log.
+//
+// Named for the role and not for cube-cos-api, because the registry now holds
+// one of these per Backend: a create goes to nova, and a k8s cluster will go
+// to Rancher. path is relative to whatever base URL the implementation owns —
+// for nova that is the compute endpoint from the Keystone catalog, which is
+// why "/servers" is the whole of what the allowlist writes down.
 //
 // idempotencyKey is passed for the transport to send as a request header. A
 // server that honours it collapses a retry; a server that ignores it loses
 // nothing, because the duplicate suppression this package performs (see
 // writeLedger) does not depend on it.
-type CubeCOSPoster interface {
+type Poster interface {
 	Post(ctx context.Context, path string, body []byte, idempotencyKey string, maxBytes int) ([]byte, error)
 }
 
@@ -74,6 +79,18 @@ type InstanceProfile struct {
 	Flavor  string
 	Image   string
 	Network string
+	// Project is no longer sent. nova takes the project from the credential's
+	// scope, so there is no field to fill and none to get wrong — see the
+	// note on create_instance. It stays because it is what the operator
+	// declares this agent creates in, and it is what an approval statement
+	// tells a person before they agree.
+	//
+	// That makes it a second statement of something the credential also
+	// knows, and two statements can disagree. The credential is the one that
+	// decides: internal/openstack refuses outright if Keystone reports a
+	// scope other than the one its own configuration names. Cross-checking
+	// this field against that one is worth doing where both are wired
+	// together, which is not yet anywhere.
 	Project string
 }
 
@@ -282,7 +299,7 @@ func (r *Registry) callPost(ctx context.Context, tool Tool, args map[string]stri
 		return out, nil
 	}
 
-	payload, err := json.Marshal(body)
+	payload, err := encodeBody(tool.Backend, body)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBadArgument, err)
 	}
@@ -296,7 +313,7 @@ func (r *Registry) callPost(ctx context.Context, tool Tool, args map[string]stri
 	defer cancel()
 
 	started := time.Now()
-	out, runErr := r.cubeCOSWrite.Post(ctx, path, payload, key, max)
+	out, runErr := r.writerFor(tool.Backend).Post(ctx, path, payload, key, max)
 	runErr = asTimeout(ctx, tool.Name, timeout, runErr)
 
 	rec := ToolCall{

@@ -22,16 +22,17 @@ type poster struct {
 
 type postCall struct {
 	path string
-	body map[string]string
-	key  string
+	// raw, not a decoded map: the body is the backend's wire shape now, and
+	// nova's is nested. Keeping the bytes lets a test assert the shape that
+	// actually leaves rather than one the double chose to impose.
+	raw []byte
+	key string
 }
 
 func (p *poster) Post(_ context.Context, path string, body []byte, key string, _ int) ([]byte, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var decoded map[string]string
-	_ = json.Unmarshal(body, &decoded)
-	p.calls = append(p.calls, postCall{path: path, body: decoded, key: key})
+	p.calls = append(p.calls, postCall{path: path, raw: append([]byte(nil), body...), key: key})
 	if p.err != nil {
 		return nil, p.err
 	}
@@ -64,7 +65,7 @@ func writeRegistry(t *testing.T, now func() time.Time) (*Registry, *poster, *rec
 		Flavor: "m1.large", Image: "ubuntu-24.04", Network: "tenant-net", Project: "acme-prod",
 	})
 	p := &poster{}
-	r.SetWriterForTest(p, now)
+	r.SetWriterForTest(BackendOpenStackCompute, p, now)
 	return r, p, rec
 }
 
@@ -79,22 +80,47 @@ func TestAWriteSendsOnlyWhatTheAllowlistDeclares(t *testing.T) {
 		t.Errorf("output = %s", out)
 	}
 	got := p.last()
-	if got.path != "/api/v1/datacenters/dc1/instances" {
-		t.Errorf("path = %q", got.path)
+	// nova's path, relative to the compute endpoint the transport owns. No
+	// host, no version prefix, no project id — none of those are the
+	// allowlist's to know.
+	if got.path != "/servers" {
+		t.Errorf("path = %q, want nova's /servers", got.path)
 	}
+
 	// The caller chose the name. Everything else came from the profile, which
-	// is the property that makes a free-text parameter tolerable.
-	want := map[string]string{
-		"name": "web-03", "flavor": "m1.large", "image": "ubuntu-24.04",
-		"network": "tenant-net", "project": "acme-prod",
+	// is the property that makes a free-text parameter tolerable. Asserted on
+	// nova's wire shape, because that is what a nova would receive.
+	var sent struct {
+		Server struct {
+			Name      string `json:"name"`
+			FlavorRef string `json:"flavorRef"`
+			ImageRef  string `json:"imageRef"`
+			Networks  []struct {
+				UUID string `json:"uuid"`
+			} `json:"networks"`
+			Project string `json:"project"`
+		} `json:"server"`
 	}
-	for k, v := range want {
-		if got.body[k] != v {
-			t.Errorf("body[%s] = %q, want %q", k, got.body[k], v)
-		}
+	if err := json.Unmarshal(got.raw, &sent); err != nil {
+		t.Fatalf("body is not nova's shape: %v (%s)", err, got.raw)
 	}
-	if len(got.body) != len(want) {
-		t.Errorf("body has %d fields, want %d: %v", len(got.body), len(want), got.body)
+	if sent.Server.Name != "web-03" {
+		t.Errorf("name = %q", sent.Server.Name)
+	}
+	if sent.Server.FlavorRef != "m1.large" {
+		t.Errorf("flavorRef = %q", sent.Server.FlavorRef)
+	}
+	if sent.Server.ImageRef != "ubuntu-24.04" {
+		t.Errorf("imageRef = %q", sent.Server.ImageRef)
+	}
+	if len(sent.Server.Networks) != 1 || sent.Server.Networks[0].UUID != "tenant-net" {
+		t.Errorf("networks = %+v, want one uuid", sent.Server.Networks)
+	}
+	// The profile's project scopes the credential; it is not a field, and a
+	// server created with one would be a server whose project was named by
+	// the request rather than by the token.
+	if sent.Server.Project != "" {
+		t.Errorf("body names a project (%q); in nova it is the credential's scope", sent.Server.Project)
 	}
 	if got.key == "" {
 		t.Error("no idempotency key was sent")
@@ -107,14 +133,25 @@ func TestAWriteSendsOnlyWhatTheAllowlistDeclares(t *testing.T) {
 func TestACallerCannotChooseWhatTheProfileDecides(t *testing.T) {
 	r, p, _ := writeRegistry(t, nil)
 
-	_, err := r.Call(context.Background(), "create_instance", map[string]string{
-		"{name}": "web-03", "{image}": "attacker-image",
-	})
-	if !errors.Is(err, ErrBadArgument) {
-		t.Fatalf("err = %v, want ErrBadArgument", err)
-	}
-	if p.count() != 0 {
-		t.Error("a refused call still sent a request")
+	for _, arg := range []string{"{image}", "{flavor}", "{network}", "{project}"} {
+		_, err := r.Call(context.Background(), "create_instance", map[string]string{
+			"{name}": "web-03", arg: "attacker-chosen",
+		})
+		if !errors.Is(err, ErrBadArgument) {
+			t.Fatalf("%s: err = %v, want ErrBadArgument", arg, err)
+		}
+		// The reason matters, not just the refusal. Both this guard and the
+		// unknown-argument fallback return ErrBadArgument, so asserting only
+		// the sentinel passes with the guard deleted — which is exactly what
+		// happened when it was deliberately broken. Pinning the message pins
+		// the property: an executor-filled value is refused *as* executor
+		// context, rather than happening to be unknown.
+		if !strings.Contains(err.Error(), "executor context") {
+			t.Errorf("%s was refused as %v; it should be refused as executor context", arg, err)
+		}
+		if p.count() != 0 {
+			t.Errorf("%s: a refused call still sent a request", arg)
+		}
 	}
 }
 
@@ -126,7 +163,7 @@ func TestAnUnconfiguredProfileCreatesNothing(t *testing.T) {
 	}
 	r.ConfigureCubeCOS("dc1", nil)
 	p := &poster{}
-	r.SetWriterForTest(p, nil)
+	r.SetWriterForTest(BackendOpenStackCompute, p, nil)
 
 	if _, err := r.Call(context.Background(), "create_instance", map[string]string{"{name}": "web-03"}); !errors.Is(err, ErrBadArgument) {
 		t.Fatalf("err = %v, want a refusal", err)

@@ -30,22 +30,48 @@ const (
 	specDC      = "{dataCenter}"
 )
 
-// notInTheSpec lists allowlist paths knowingly absent from cube-cos-api,
-// each with the reason. An entry here is a debt, not a dispensation: it says
-// the tool cannot work today, and removing it is what shipping the tool means.
-var notInTheSpec = map[string]string{
-	"/api/v1/datacenters/{dc}/instances": "cube-cos-api does not create instances — " +
-		"no such path in its OpenAPI document or source, and VM lifecycle is not " +
-		"this API's concern. create_instance cannot write until either that endpoint " +
-		"exists or the tool is given a transport that reaches whatever does.",
+// notInTheSpec lists allowlist paths knowingly absent from the API that would
+// have to serve them, each with the reason. An entry here is a debt, not a
+// dispensation: it says the tool cannot work today, and removing it is what
+// shipping the tool means.
+//
+// It is empty, and that is the point — create_instance was its only entry, and
+// giving the tool nova as a destination paid the debt rather than excusing it.
+// The two guards below iterate this map, so an empty map exercises nothing;
+// they earn their keep the moment anyone adds an entry, which is when a wrong
+// one would otherwise go unnoticed.
+var notInTheSpec = map[string]string{}
+
+// specFile is the vendored path list each backend is checked against, and the
+// floor below which the file is assumed truncated.
+//
+// Per backend rather than one list, because "the API that must serve this" is
+// a different API per tool now. A backend with no entry here is a backend
+// nothing can be checked against, and addPath below treats that as a failure
+// rather than a pass: an unchecked destination is how the first one went
+// wrong.
+var specFile = map[Backend]struct {
+	path string
+	// min guards against a truncated or empty file, which would make every
+	// path "absent" and every exclusion look justified — the failure this
+	// test exists to prevent in the code it checks.
+	min int
+}{
+	BackendCubeCOS:          {"testdata/cube-cos-api-paths.txt", 50},
+	BackendOpenStackCompute: {"testdata/nova-compute-paths.txt", 100},
 }
 
-func specPaths(t *testing.T) map[string]bool {
+func specPaths(t *testing.T, b Backend) map[string]bool {
 	t.Helper()
 
-	f, err := os.Open("testdata/cube-cos-api-paths.txt")
+	src, known := specFile[b]
+	if !known {
+		t.Fatalf("no vendored path list for backend %s; add one before a tool goes there", b)
+	}
+
+	f, err := os.Open(src.path)
 	if err != nil {
-		t.Fatalf("open the vendored path list: %v", err)
+		t.Fatalf("open the vendored path list for %s: %v", b, err)
 	}
 	defer f.Close()
 
@@ -59,21 +85,30 @@ func specPaths(t *testing.T) map[string]bool {
 		paths[line] = true
 	}
 	if err := s.Err(); err != nil {
-		t.Fatalf("read the vendored path list: %v", err)
+		t.Fatalf("read the vendored path list for %s: %v", b, err)
 	}
-	// A truncated or empty file would make every path "absent" and every
-	// exclusion look justified, which is the failure this test exists to
-	// prevent in the code it checks.
-	if len(paths) < 50 {
-		t.Fatalf("vendored path list holds %d paths, far fewer than cube-cos-api serves; it is truncated", len(paths))
+	if len(paths) < src.min {
+		t.Fatalf("vendored path list for %s holds %d paths, far fewer than it serves; it is truncated", b, len(paths))
 	}
 	return paths
+}
+
+// specName rewrites an allowlist path into the vocabulary its spec uses.
+//
+// Only cube-cos-api needs it. nova's paths carry no executor-filled
+// placeholder — {dc} is meaningless to it, since which cluster is decided by
+// which endpoint the catalog gave us — so its paths are compared verbatim.
+func specName(b Backend, path string) string {
+	if b == BackendCubeCOS {
+		return strings.ReplaceAll(path, allowlistDC, specDC)
+	}
+	return path
 }
 
 // TestEveryAllowlistPathIsOneTheAPIServes is the check that would have caught
 // create_instance before it shipped.
 func TestEveryAllowlistPathIsOneTheAPIServes(t *testing.T) {
-	spec := specPaths(t)
+	specs := map[Backend]map[string]bool{}
 
 	for _, tool := range append(append([]Tool{}, Allowlist...), ProbeControls...) {
 		for _, path := range []string{tool.Get, tool.Post} {
@@ -84,12 +119,48 @@ func TestEveryAllowlistPathIsOneTheAPIServes(t *testing.T) {
 				t.Logf("%s: %s is knowingly absent from the API: %s", tool.Name, path, reason)
 				continue
 			}
-			if !spec[strings.ReplaceAll(path, allowlistDC, specDC)] {
-				t.Errorf("%s names %s, which cube-cos-api does not serve; "+
+			spec, loaded := specs[tool.Backend]
+			if !loaded {
+				spec = specPaths(t, tool.Backend)
+				specs[tool.Backend] = spec
+			}
+			if !spec[specName(tool.Backend, path)] {
+				t.Errorf("%s names %s, which %s does not serve; "+
 					"fix the path, or list it in notInTheSpec with the reason it cannot work yet",
-					tool.Name, path)
+					tool.Name, path, tool.Backend)
 			}
 		}
+	}
+}
+
+// TestTheCreateGoesToNovaAndNotTheManagementAPI pins the destination itself,
+// not just that the path resolves somewhere.
+//
+// Without it, a create could be pointed back at cube-cos-api with a path that
+// happens to exist there and every other test would still pass. The tool's
+// whole correction was which API it addresses, so that is worth asserting
+// directly rather than as a side effect.
+func TestTheCreateGoesToNovaAndNotTheManagementAPI(t *testing.T) {
+	var found bool
+	for _, tool := range Allowlist {
+		if tool.Name != "create_instance" {
+			continue
+		}
+		found = true
+		if tool.Backend != BackendOpenStackCompute {
+			t.Errorf("create_instance goes to %s; instances are nova's", tool.Backend)
+		}
+		if tool.Post != "/servers" {
+			t.Errorf("create_instance posts to %q, want nova's /servers", tool.Post)
+		}
+		if _, names := tool.Body["project"]; names {
+			t.Error("create_instance names a project in its body; " +
+				"in nova the project is the credential's scope, and a project " +
+				"that cannot be named cannot be named wrongly")
+		}
+	}
+	if !found {
+		t.Fatal("create_instance is not in the allowlist; if it was removed, remove this test")
 	}
 }
 
@@ -98,12 +169,25 @@ func TestEveryAllowlistPathIsOneTheAPIServes(t *testing.T) {
 // someone already paid, and leaving it listed hides a working tool behind a
 // note saying it cannot work.
 func TestAnExcludedPathIsOneTheAPIReallyLacks(t *testing.T) {
-	spec := specPaths(t)
+	declaredBy := map[string]Backend{}
+	for _, tool := range append(append([]Tool{}, Allowlist...), ProbeControls...) {
+		for _, path := range []string{tool.Get, tool.Post} {
+			if path != "" {
+				declaredBy[path] = tool.Backend
+			}
+		}
+	}
 
 	for path, reason := range notInTheSpec {
-		if spec[strings.ReplaceAll(path, allowlistDC, specDC)] {
-			t.Errorf("%s is listed as absent from cube-cos-api (%q) but the spec now has it; remove the exclusion",
-				path, reason)
+		b, declared := declaredBy[path]
+		if !declared {
+			// The other guard reports this; checking it against an
+			// arbitrary spec here would be a second, worse message.
+			continue
+		}
+		if specPaths(t, b)[specName(b, path)] {
+			t.Errorf("%s is listed as absent from %s (%q) but the spec now has it; remove the exclusion",
+				path, b, reason)
 		}
 	}
 }

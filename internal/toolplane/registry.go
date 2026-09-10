@@ -92,9 +92,10 @@ type Registry struct {
 	// rather than creating something the operator did not specify.
 	profile InstanceProfile
 
-	// cubeCOSWrite performs the authenticated write; nil-safe via a default
-	// that refuses, exactly as cubeCOS is for reads.
-	cubeCOSWrite CubeCOSPoster
+	// writers performs the authenticated write, one client per backend.
+	// Nil-safe via writerFor, which returns a refusing default naming the
+	// configuration that is missing — exactly as cubeCOS is for reads.
+	writers map[Backend]Poster
 
 	// writes suppresses a repeat of a completed write. See writeLedger.
 	writes *writeLedger
@@ -138,9 +139,9 @@ func New(tools []Tool, audit Auditor, opts ...Option) (*Registry, error) {
 		// Fail closed before any option runs: a registry built without
 		// WithLevel serves reads, which is ADR 0011's "unset means observe"
 		// at the one place a caller could forget to say it.
-		level:        DefaultLevel,
-		cubeCOSWrite: notConfiguredPoster{},
-		writes:       newWriteLedger(),
+		level:   DefaultLevel,
+		writers: map[Backend]Poster{},
+		writes:  newWriteLedger(),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -215,14 +216,34 @@ func (r *Registry) Level() Level { return r.level }
 // instance gets a clean refusal rather than a surprising default.
 func (r *Registry) ConfigureInstanceProfile(p InstanceProfile) { r.profile = p }
 
-// ConfigureCubeCOSWriter wires the authenticated write client. Separate from
-// ConfigureCubeCOS so an agent can read the management API without being able
-// to write to it: an operator who wires only the reader has a plane that
-// cannot create anything, whatever its level says.
-func (r *Registry) ConfigureCubeCOSWriter(pw CubeCOSPoster) {
+// ConfigureWriter wires the authenticated write client for one backend.
+// Separate from ConfigureCubeCOS so an agent can read the management API
+// without being able to write anywhere: an operator who wires only the reader
+// has a plane that cannot create anything, whatever its level says.
+//
+// Per backend rather than one writer, because the destinations have separate
+// credentials and separate custody — wiring nova must not silently grant
+// whatever comes next.
+func (r *Registry) ConfigureWriter(b Backend, pw Poster) {
 	if pw != nil {
-		r.cubeCOSWrite = pw
+		r.writers[b] = pw
 	}
+}
+
+// writerFor returns the client for a backend, or a refusing default.
+//
+// The default is per backend and says what is missing, because "not
+// configured" is only actionable if it names which configuration. An
+// unrecognised backend refuses too: absence of a client is not permission,
+// the same rule an unrecognised impact follows.
+func (r *Registry) writerFor(b Backend) Poster {
+	if w, ok := r.writers[b]; ok {
+		return w
+	}
+	if b == BackendOpenStackCompute {
+		return notConfiguredCompute{}
+	}
+	return notConfiguredPoster{}
 }
 
 // contextValues is every placeholder the executor fills from its own
@@ -234,10 +255,10 @@ func (r *Registry) contextValues() map[string]string {
 	return v
 }
 
-// SetWriterForTest is ConfigureCubeCOSWriter's test-named twin, and also fixes
-// the ledger's clock so a suite can age an entry out without sleeping.
-func (r *Registry) SetWriterForTest(pw CubeCOSPoster, now func() time.Time) {
-	r.ConfigureCubeCOSWriter(pw)
+// SetWriterForTest is ConfigureWriter's test-named twin, and also fixes the
+// ledger's clock so a suite can age an entry out without sleeping.
+func (r *Registry) SetWriterForTest(b Backend, pw Poster, now func() time.Time) {
+	r.ConfigureWriter(b, pw)
 	if now != nil {
 		r.writes.now = now
 	}

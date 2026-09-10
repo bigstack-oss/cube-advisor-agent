@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"github.com/bigstack-oss/cube-advisor-agent/internal/agent"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/console"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
+	"github.com/bigstack-oss/cube-advisor-agent/internal/openstack"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnel"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
@@ -98,6 +100,34 @@ func runCmd(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return exitFailed
+	}
+
+	// The OpenStack credential, if the operator has written one. Absent is the
+	// ordinary state and not an error: an agent with no credential serves
+	// every read it always did and refuses a create with a message naming the
+	// missing configuration — which is a different refusal from the action
+	// level's, and says so.
+	//
+	// Wired only when present, so opting in is writing a file, and nothing
+	// about an existing deployment changes until someone does.
+	switch cred, err := openstack.ReadCredential(*dir); {
+	case errors.Is(err, openstack.ErrNoCredential):
+		// Said once, at startup, because "why did it refuse" is a question
+		// better answered before it is asked.
+		fmt.Fprintf(os.Stderr, "run: no OpenStack credential; creates will refuse until one is configured\n")
+	case err != nil:
+		// Loud, and still starts: a malformed credential must not take
+		// diagnosis away from the operator at the moment they need it, which
+		// is the same argument the action level makes.
+		fmt.Fprintf(os.Stderr, "run: %v; creates will refuse until it is corrected\n", err)
+	default:
+		compute, cerr := openstack.NewCompute(cred)
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "run: %v; creates will refuse until it is corrected\n", cerr)
+			break
+		}
+		reg.ConfigureWriter(toolplane.BackendOpenStackCompute, compute)
+		fmt.Fprintf(os.Stderr, "run: OpenStack credential loaded for project %s\n", cred.Project)
 	}
 	// Stated at startup, because "what may this assistant do here" is the
 	// question an operator asks of a log and should not have to infer.

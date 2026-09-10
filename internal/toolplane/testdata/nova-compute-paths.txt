@@ -1,0 +1,149 @@
+# OpenStack compute (nova) API paths, extracted from nova's own router.
+#
+# Source:     nova api/openstack/compute/routes.py, as vendored by CubeCOS
+#             at core/nova/caracal_patch/api/openstack/compute/routes.py.orig
+# Release:    Caracal (the release CubeCOS ships; every core/*/*.mk names it)
+# cubecos:    5a0e4640dd95b85087c8fdb64818e13c0b2549a9
+#
+# Paths are relative to the compute service endpoint, which the agent reads
+# from the Keystone catalog at call time. No host, port, version prefix or
+# project id appears here, because none of those are the allowlist's to know.
+#
+# Regenerate:
+#   grep -oE "^    \(.\/[a-zA-Z0-9_{}/.-]+." routes.py.orig \
+#     | sed "s/^    (.//; s/.$//" | sort -u
+#
+# Vendored rather than read from a checkout because CI has neither cubecos nor
+# a nova source tree, and a conformance test that skips when its input is
+# missing reports green for exactly the case it was written to catch.
+
+/extensions
+/extensions/{id}
+/flavors
+/flavors/detail
+/flavors/{flavor_id}/os-extra_specs
+/flavors/{flavor_id}/os-extra_specs/{id}
+/flavors/{flavor_id}/os-flavor-access
+/flavors/{id}
+/flavors/{id}/action
+/images
+/images/detail
+/images/{id}
+/images/{image_id}/metadata
+/images/{image_id}/metadata/{id}
+/limits
+/os-agents
+/os-agents/{id}
+/os-aggregates
+/os-aggregates/{id}
+/os-aggregates/{id}/action
+/os-aggregates/{id}/images
+/os-assisted-volume-snapshots
+/os-assisted-volume-snapshots/{id}
+/os-availability-zone
+/os-availability-zone/detail
+/os-baremetal-nodes
+/os-baremetal-nodes/{id}
+/os-baremetal-nodes/{id}/action
+/os-cells
+/os-cells/capacities
+/os-cells/detail
+/os-cells/{id}
+/os-cells/{id}/capacities
+/os-cells/info
+/os-cells/sync_instances
+/os-certificates
+/os-certificates/{id}
+/os-cloudpipe
+/os-cloudpipe/{id}
+/os-console-auth-tokens/{id}
+/os-fixed-ips/{id}
+/os-fixed-ips/{id}/action
+/os-floating-ip-dns
+/os-floating-ip-dns/{domain_id}/entries/{id}
+/os-floating-ip-dns/{id}
+/os-floating-ip-pools
+/os-floating-ips
+/os-floating-ips-bulk
+/os-floating-ips-bulk/{id}
+/os-floating-ips/{id}
+/os-fping
+/os-fping/{id}
+/os-hosts
+/os-hosts/{id}
+/os-hosts/{id}/reboot
+/os-hosts/{id}/shutdown
+/os-hosts/{id}/startup
+/os-hypervisors
+/os-hypervisors/detail
+/os-hypervisors/{id}
+/os-hypervisors/{id}/search
+/os-hypervisors/{id}/servers
+/os-hypervisors/{id}/uptime
+/os-hypervisors/statistics
+/os-instance_usage_audit_log
+/os-instance_usage_audit_log/{id}
+/os-keypairs
+/os-keypairs/{id}
+/os-migrations
+/os-networks
+/os-networks/add
+/os-networks/{id}
+/os-networks/{id}/action
+/os-quota-class-sets/{id}
+/os-quota-sets/{id}
+/os-quota-sets/{id}/defaults
+/os-quota-sets/{id}/detail
+/os-security-group-default-rules
+/os-security-group-default-rules/{id}
+/os-security-group-rules
+/os-security-group-rules/{id}
+/os-security-groups
+/os-security-groups/{id}
+/os-server-external-events
+/os-server-groups
+/os-server-groups/{id}
+/os-services
+/os-services/{id}
+/os-simple-tenant-usage
+/os-simple-tenant-usage/{id}
+/os-snapshots
+/os-snapshots/detail
+/os-snapshots/{id}
+/os-tenant-networks
+/os-tenant-networks/{id}
+/os-volumes
+/os-volumes_boot
+/os-volumes_boot/detail
+/os-volumes_boot/{id}
+/os-volumes_boot/{id}/action
+/os-volumes/detail
+/os-volumes/{id}
+/servers
+/servers/detail
+/servers/{id}
+/servers/{id}/action
+/servers/{server_id}/consoles
+/servers/{server_id}/consoles/{id}
+/servers/{server_id}/diagnostics
+/servers/{server_id}/ips
+/servers/{server_id}/ips/{id}
+/servers/{server_id}/metadata
+/servers/{server_id}/metadata/{id}
+/servers/{server_id}/migrations
+/servers/{server_id}/migrations/{id}
+/servers/{server_id}/migrations/{id}/action
+/servers/{server_id}/os-instance-actions
+/servers/{server_id}/os-instance-actions/{id}
+/servers/{server_id}/os-interface
+/servers/{server_id}/os-interface/{id}
+/servers/{server_id}/os-security-groups
+/servers/{server_id}/os-server-password
+/servers/{server_id}/os-virtual-interfaces
+/servers/{server_id}/os-volume_attachments
+/servers/{server_id}/os-volume_attachments/{id}
+/servers/{server_id}/remote-consoles
+/servers/{server_id}/tags
+/servers/{server_id}/tags/{id}
+/servers/{server_id}/topology
+/versions/{id}
