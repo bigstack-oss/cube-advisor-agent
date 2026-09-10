@@ -371,11 +371,25 @@ var Allowlist = []Tool{
 	// spends and what code it runs are the customer's decisions, made in
 	// advance and not per call.
 	//
-	// The path and body field names must be confirmed against the running
-	// cube-cos-api's OpenAPI document before this is enabled on a real cluster.
-	// Nothing here can act until an operator both raises a level and wires a
-	// writer, so shipping the mechanism ahead of that confirmation costs
-	// nothing; taking it on trust when the level is first raised would not.
+	// The path was confirmed against cube-cos-api's OpenAPI document, and it
+	// is wrong: there is no POST /api/v1/datacenters/{dataCenter}/instances,
+	// in the document, in the copy embedded at build time, or as a handler in
+	// that API's source. Its resource families are nodes, images, volumes,
+	// settings, tunings and the rest; VM lifecycle is not among them. So the
+	// body field names below are unconfirmable too — there is no schema to
+	// confirm them against.
+	//
+	// The entry stays because the mechanism around it is what slice 3 built
+	// and tested — the level gate, the approval statement, the write ledger,
+	// the refusal a caller can read — and none of that is wrong. What is
+	// missing is somewhere to send the request. Whoever supplies that decides
+	// the shape: an endpoint on cube-cos-api, or a transport that reaches
+	// whatever owns instances. Until then the write cannot succeed, and it
+	// cannot be attempted either, since a cluster at observe never offers it.
+	//
+	// conformance_test.go holds this as a named debt rather than a comment,
+	// so it is checked every run and cannot be forgotten the way this
+	// sentence's predecessor nearly was.
 	{
 		Name: "create_instance",
 		Description: "Create one virtual machine from this cluster's configured instance profile. " +
