@@ -136,6 +136,12 @@ func (s Shape) String() string {
 // maxDNSLabel is the DNS limit, and doubles as the length bound.
 const maxDNSLabel = 63
 
+// catalogArg is the one argument a catalogue read takes: which entry to fetch.
+// Named once here rather than written as a literal in the registry and again
+// in the SaaS's schema, because the two have to agree and a string typed twice
+// is a string that eventually differs.
+const catalogArg = "resource"
+
 // admits reports whether v satisfies the shape.
 //
 // Written as explicit character classes rather than a compiled regexp, so the
@@ -274,8 +280,28 @@ type Tool struct {
 	// and an idempotency key, because a repeated read is free and a repeated
 	// create is not.
 	//
-	// Exactly one of Argv, Get, Post or Control is set.
+	// Exactly one of Argv, Get, Post, Catalog or Control is set.
 	Post string
+
+	// Catalog is a finite set of cube-cos-api GET paths this one tool may
+	// fetch: the value the caller supplies, mapped to the path template it
+	// selects. The caller names a key; anything else is refused. The method is
+	// GET, always, for the same structural reason Get is — there is no field
+	// on a catalog entry that could make it anything else.
+	//
+	// It exists because Get costs one tool per path, and a diagnosis assistant
+	// is asked to look at things we did not think of when we shipped. Three
+	// hand-written reads against an API that declares dozens is not a security
+	// property, it is a release cycle: every "can you also check X" was a new
+	// entry, a build and a deploy.
+	//
+	// A key is not a Shape and not a pattern — it is a map lookup, which is the
+	// same finite-value-set rule Params applies, in its strongest form. What a
+	// caller can express is exactly the set below and nothing else, so widening
+	// the read surface is still an edit to this file that a reviewer reads.
+	//
+	// Exactly one of Argv, Get, Post, Catalog or Control is set.
+	Catalog map[string]string
 
 	// Body is the JSON object sent with Post: a field name to either a literal
 	// or a placeholder declared in Params or Free. There is no free-form body
@@ -319,6 +345,93 @@ type Tool struct {
 	// one, so the model receives the executor's honest "tool timed out" result
 	// instead of a SaaS-side channel error it can only guess about.
 	Timeout time.Duration
+}
+
+// CubeCOSReads is the set of cube-cos-api GET paths cube_cos_read may fetch,
+// keyed by the value a caller supplies.
+//
+// Admission is opt-in. A path is reachable because it is written here, not
+// because the API happens to serve it — so an endpoint cube-cos-api gains
+// tomorrow is unreachable until someone reads it and adds it. The opposite
+// rule, a list of paths to exclude, fails the wrong way: the next sensitive
+// endpoint upstream would be reachable the day it shipped, and nobody here
+// would know it existed.
+//
+// What is left out, and why, is in cubeCOSReadsHeldBack. Together the two
+// account for every zero-parameter GET the API declares, and a test says so —
+// so a new upstream read cannot be quietly unreachable either. It has to be
+// classified, one way or the other, by a person.
+//
+// Three rules decided the split:
+//
+//   - A read that can carry a credential is out. Settings, integrations and
+//     licenses hold SMTP passwords, storage-vendor logins, webhook URLs with
+//     tokens in them and license keys. None of it helps diagnose a cluster,
+//     and a diagnosis assistant reading them puts them in a transcript.
+//   - A read whose size is unbounded by anything here is out. Support bundles
+//     are the case: the result cap would truncate one to 32 KiB of an archive,
+//     which is worse than not offering it.
+//   - A duplicate is out. The .csv variants return what the JSON reads already
+//     return; two ways to ask the same question is a worse tool list, not a
+//     wider one.
+//
+// Query parameters are not expressible — the key selects a path and nothing
+// else — so watch=true, which turns several of these into an event stream, is
+// unreachable by construction rather than by exclusion.
+var CubeCOSReads = map[string]string{
+	"datacenter":              "/api/v1/datacenters/{dc}",
+	"datacenters":             "/api/v1/datacenters",
+	"events":                  "/api/v1/datacenters/{dc}/events",
+	"events/abstract":         "/api/v1/datacenters/{dc}/events/abstract",
+	"events/filterConditions": "/api/v1/datacenters/{dc}/events/filterConditions",
+	"events/predefined":       "/api/v1/datacenters/{dc}/events/predefined",
+	"events/rank":             "/api/v1/datacenters/{dc}/events/rank",
+	"firmwares":               "/api/v1/datacenters/{dc}/firmwares",
+	"firmwares/upgrade":       "/api/v1/datacenters/{dc}/firmwares/upgradeProgress",
+	"fixpacks":                "/api/v1/datacenters/{dc}/fixpacks",
+	"healths":                 "/api/v1/datacenters/{dc}/healths",
+	"images":                  "/api/v1/datacenters/{dc}/images",
+	"images/materials":        "/api/v1/datacenters/{dc}/images/materials",
+	"metrics":                 "/api/v1/datacenters/{dc}/metrics",
+	"nodes":                   "/api/v1/datacenters/{dc}/nodes",
+	"services":                "/api/v1/datacenters/{dc}/services",
+	"triggers":                "/api/v1/datacenters/{dc}/triggers",
+	"triggers/materials":      "/api/v1/datacenters/{dc}/triggers/materials",
+	"tunings/parameters":      "/api/v1/datacenters/{dc}/tunings/parameters",
+	"tunings/specs":           "/api/v1/datacenters/{dc}/tunings/specs",
+	"volumes":                 "/api/v1/datacenters/{dc}/volumes",
+}
+
+// cubeCOSReadsHeldBack is every other zero-parameter GET cube-cos-api declares,
+// with the reason it is not in CubeCOSReads.
+//
+// It is data rather than prose so a test can require the two sets to cover the
+// API between them. That is what makes admission opt-in and still visible: a
+// read this agent will not perform is a decision written down, not an absence
+// somebody has to notice.
+var cubeCOSReadsHeldBack = map[string]string{
+	"/api/v1/datacenters/{dataCenter}/settings":                  "configuration, and the delivery settings under it carry credentials",
+	"/api/v1/datacenters/{dataCenter}/settings/email/recipients": "email delivery configuration",
+	"/api/v1/datacenters/{dataCenter}/settings/email/senders":    "email delivery configuration, sender credentials included",
+	"/api/v1/datacenters/{dataCenter}/settings/slack/channels":   "chat delivery configuration, webhook URLs included",
+	"/api/v1/datacenters/{dataCenter}/integrations/applications": "external-system integration, credentials included",
+	"/api/v1/datacenters/{dataCenter}/integrations/storages":     "storage-vendor integration, logins included",
+	"/api/v1/datacenters/{dataCenter}/integrations/storages/models": "integration catalogue; only useful alongside the " +
+		"integration reads that are held back",
+	"/api/v1/datacenters/{dataCenter}/integrations/storages/vendors": "integration catalogue; same",
+	"/api/v1/datacenters/{dataCenter}/licenses":                      "license keys",
+	"/api/v1/datacenters/{dataCenter}/licenses/attachments":          "license material",
+	"/api/v1/datacenters/{dataCenter}/me":                            "the executor's own API identity, not a fact about the cluster",
+	"/api/v1/datacenters/{dataCenter}/notifications":                 "notification payloads and their delivery targets",
+	"/api/v1/datacenters/{dataCenter}/notifications/last":            "same",
+	"/api/v1/datacenters/{dataCenter}/supportFiles":                  "support bundles; unbounded, and a 32 KiB slice of an archive is not a read",
+	"/api/v1/datacenters/{dataCenter}/grafana/networkDevices":        "dashboard payload, may embed an access token; not diagnostic text",
+	"/api/v1/datacenters/{dataCenter}/grafana/networks":              "same",
+	"/api/v1/datacenters/{dataCenter}/grafana/storages":              "same",
+	"/api/v1/datacenters/{dataCenter}/grafana/topHosts":              "same",
+	"/api/v1/datacenters/{dataCenter}/grafana/topInstances":          "same",
+	"/api/v1/datacenters/{dataCenter}/images.csv":                    "CSV duplicate of the images read",
+	"/api/v1/datacenters/{dataCenter}/volumes.csv":                   "CSV duplicate of the volumes read",
 }
 
 // Allowlist is the complete set of tools the agent will serve.
@@ -382,26 +495,21 @@ var Allowlist = []Tool{
 	},
 	// cube-cos-api reads. GET only, structurally — the resolved path is the
 	// whole request, and {dc} is filled by the executor, so the SaaS chooses
-	// which overview to fetch and nothing else. Start with the three
-	// zero-parameter overviews; per-resource reads (a named node, a service's
-	// health) are added the same way once their value sets are pinned down.
+	// which overview to fetch and nothing else.
+	//
+	// One tool over a catalogue rather than one tool per path. Twenty-one
+	// entries as twenty-one tools would be twenty-one names and descriptions
+	// in front of the model on every turn, for reads that differ only in which
+	// noun they return; and because tool specs are what the SaaS fingerprints
+	// as its prompt stamp, the list would move that stamp every time the
+	// catalogue grew. One tool with a finite key set costs one name and one
+	// enum, and adding a read moves nothing but the enum.
 	{
-		Name:        "cube_cos_healths",
-		Description: "Cluster health summary from cube-cos-api: every service and its state.",
-		Get:         "/api/v1/datacenters/{dc}/healths",
-		Impact:      ImpactRead,
-	},
-	{
-		Name:        "cube_cos_nodes",
-		Description: "The cluster's nodes and their roles/state from cube-cos-api.",
-		Get:         "/api/v1/datacenters/{dc}/nodes",
-		Impact:      ImpactRead,
-	},
-	{
-		Name:        "cube_cos_events",
-		Description: "Recent cluster events from cube-cos-api — the timeline of what changed.",
-		Get:         "/api/v1/datacenters/{dc}/events",
-		Impact:      ImpactRead,
+		Name: "cube_cos_read",
+		Description: "Read one overview from cube-cos-api: health, nodes, events, images, " +
+			"volumes, services, firmwares, fixpacks, tunings, triggers or metrics.",
+		Catalog: CubeCOSReads,
+		Impact:  ImpactRead,
 	},
 	// The first entry that changes the cluster (ADR 0011, slice 3). Served
 	// only where the node's action-level file says operate or internal; every
@@ -541,13 +649,13 @@ func (t Tool) validate(probes bool) error {
 		return fmt.Errorf("tool %q has a negative timeout", t.Name)
 	}
 	kinds := 0
-	for _, set := range []bool{len(t.Argv) > 0, t.Get != "", t.Post != "", t.Control != 0} {
+	for _, set := range []bool{len(t.Argv) > 0, t.Get != "", t.Post != "", len(t.Catalog) > 0, t.Control != 0} {
 		if set {
 			kinds++
 		}
 	}
 	if kinds != 1 {
-		return fmt.Errorf("tool %q must be exactly one of a command (Argv), a cube-cos-api read (Get), a cube-cos-api write (Post) or a probe-plane control (Control)", t.Name)
+		return fmt.Errorf("tool %q must be exactly one of a command (Argv), a cube-cos-api read (Get), a cube-cos-api catalogue read (Catalog), a cube-cos-api write (Post) or a probe-plane control (Control)", t.Name)
 	}
 	// A placeholder is either enumerated or shaped, never both: two answers to
 	// "what may this value be" is the same as none.
@@ -573,11 +681,45 @@ func (t Tool) validate(probes bool) error {
 		return t.validateControl()
 	case t.Get != "":
 		return t.validateGet()
+	case len(t.Catalog) > 0:
+		return t.validateCatalog()
 	case t.Post != "":
 		return t.validatePost()
 	default:
 		return t.validateCommand()
 	}
+}
+
+// validateCatalog checks a catalogue read entry.
+//
+// Every rule validateGet applies to one path is applied to each of them, plus
+// two the catalogue form makes possible: no parameters, because the key is the
+// only thing a caller supplies and a second argument would be a second thing
+// to check; and no placeholder other than {dc}, because a key selecting a
+// template that still needed an argument would put a value back in the caller's
+// hands through the side door.
+func (t Tool) validateCatalog() error {
+	if t.Impact != ImpactRead {
+		return fmt.Errorf("tool %q is a cube-cos-api catalogue read but declares impact %s; a GET changes nothing", t.Name, t.Impact)
+	}
+	if len(t.Params) > 0 || len(t.Free) > 0 {
+		return fmt.Errorf("tool %q is a catalogue read and declares parameters; the key is the only argument", t.Name)
+	}
+	for key, path := range t.Catalog {
+		if key == "" {
+			return fmt.Errorf("tool %q has a catalogue entry with an empty key", t.Name)
+		}
+		if !strings.HasPrefix(path, "/") {
+			return fmt.Errorf("tool %q catalogue entry %q has a path that is not absolute", t.Name, key)
+		}
+		for _, seg := range pathSegments(path) {
+			if isPlaceholder(seg) && seg != dcPlaceholder {
+				return fmt.Errorf("tool %q catalogue entry %q leaves %s unfilled; a catalogue path takes no argument but %s",
+					t.Name, key, seg, dcPlaceholder)
+			}
+		}
+	}
+	return nil
 }
 
 // validatePost checks a cube-cos-api write entry.

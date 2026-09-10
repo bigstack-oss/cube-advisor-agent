@@ -177,17 +177,23 @@ func TestAGetTemplateMustDeclareItsModelPlaceholders(t *testing.T) {
 	}
 }
 
-func TestTheShippedGetToolsRegister(t *testing.T) {
-	// The three overview reads ship in the allowlist and must be well-formed.
-	got := map[string]bool{}
+func TestTheShippedCatalogueReadKeepsTheOverviewsItReplaced(t *testing.T) {
+	// The three hand-written overview reads — healths, nodes and events —
+	// became keys of one catalogue tool. Named here rather than left to the
+	// coverage test, because widening a surface must not quietly narrow it:
+	// this is the assertion that the replacement lost nothing.
+	var catalog map[string]string
 	for _, tool := range Allowlist {
-		if tool.Get != "" {
-			got[tool.Name] = true
+		if len(tool.Catalog) > 0 {
+			catalog = tool.Catalog
 		}
 	}
-	for _, want := range []string{"cube_cos_healths", "cube_cos_nodes", "cube_cos_events"} {
-		if !got[want] {
-			t.Errorf("%s is not in the shipped allowlist", want)
+	if catalog == nil {
+		t.Fatal("no catalogue read ships in the allowlist")
+	}
+	for _, want := range []string{"healths", "nodes", "events"} {
+		if catalog[want] == "" {
+			t.Errorf("the catalogue no longer reads %q, which shipped as its own tool", want)
 		}
 	}
 }

@@ -56,9 +56,66 @@ var specFile = map[Backend]struct {
 	// path "absent" and every exclusion look justified — the failure this
 	// test exists to prevent in the code it checks.
 	min int
+	// methods reports whether the file records "METHOD PATH" rather than
+	// paths alone. Only a file that does can answer "does this API serve
+	// this path by GET", which is what the read catalogue's claim rests on.
+	methods bool
 }{
-	BackendCubeCOS:          {"testdata/cube-cos-api-paths.txt", 50},
-	BackendOpenStackCompute: {"testdata/nova-compute-paths.txt", 100},
+	BackendCubeCOS:          {path: "testdata/cube-cos-api-paths.txt", min: 50, methods: true},
+	BackendOpenStackCompute: {path: "testdata/nova-compute-paths.txt", min: 100},
+}
+
+// specOps reads a backend's vendored list as method -> set of paths.
+//
+// Two file shapes are in use. cube-cos-api's records "METHOD PATH", because a
+// catalogue claiming to reach only reads has to be checked against reads
+// specifically, and a path-only list cannot tell a GET from a POST sharing a
+// URL. nova's records paths alone. Asking for methods from a file that has
+// none is a Fatal rather than an empty answer, for the same reason a backend
+// with no vendored list is: an unchecked destination is how the first one went
+// wrong.
+func specOps(t *testing.T, b Backend) map[string]map[string]bool {
+	t.Helper()
+
+	src, known := specFile[b]
+	if !known {
+		t.Fatalf("no vendored path list for backend %s; add one before a tool goes there", b)
+	}
+	if !src.methods {
+		t.Fatalf("the vendored list for %s records paths without methods; it cannot answer a question about GETs", b)
+	}
+
+	f, err := os.Open(src.path)
+	if err != nil {
+		t.Fatalf("open the vendored operation list for %s: %v", b, err)
+	}
+	defer f.Close()
+
+	ops := map[string]map[string]bool{}
+	total := 0
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		method, path, ok := strings.Cut(line, " ")
+		if !ok {
+			t.Fatalf("vendored operation list for %s has a line that is not %q: %q", b, "METHOD PATH", line)
+		}
+		if ops[method] == nil {
+			ops[method] = map[string]bool{}
+		}
+		ops[method][path] = true
+		total++
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatalf("read the vendored operation list for %s: %v", b, err)
+	}
+	if total < src.min {
+		t.Fatalf("vendored operation list for %s holds %d operations, far fewer than it serves; it is truncated", b, total)
+	}
+	return ops
 }
 
 func specPaths(t *testing.T, b Backend) map[string]bool {
@@ -76,15 +133,22 @@ func specPaths(t *testing.T, b Backend) map[string]bool {
 	defer f.Close()
 
 	paths := map[string]bool{}
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		line := strings.TrimSpace(s.Text())
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// A "METHOD PATH" line contributes its path; a path-only line is the
+		// whole line. One reader for both shapes, so a caller asking only
+		// "does this API serve this path" need not know which it is reading.
+		if _, path, ok := strings.Cut(line, " "); ok {
+			paths[path] = true
 			continue
 		}
 		paths[line] = true
 	}
-	if err := s.Err(); err != nil {
+	if err := sc.Err(); err != nil {
 		t.Fatalf("read the vendored path list for %s: %v", b, err)
 	}
 	if len(paths) < src.min {
@@ -161,6 +225,95 @@ func TestTheCreateGoesToNovaAndNotTheManagementAPI(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("create_instance is not in the allowlist; if it was removed, remove this test")
+	}
+}
+
+// TestEveryCatalogueReadIsAGetTheAPIServes checks the widened read surface the
+// same way the hand-written entries are checked, and one way further: a
+// catalogue entry must be a path the API serves *by GET*. A path-only list
+// could not tell a read from a write sharing a URL, and the catalogue's whole
+// claim is that it cannot reach anything but reads.
+func TestEveryCatalogueReadIsAGetTheAPIServes(t *testing.T) {
+	gets := specOps(t, BackendCubeCOS)["GET"]
+	if len(gets) == 0 {
+		t.Fatal("the vendored operation list records no GETs; it is malformed")
+	}
+
+	for _, tool := range Allowlist {
+		for key, path := range tool.Catalog {
+			spec := specName(BackendCubeCOS, path)
+			if !gets[spec] {
+				t.Errorf("%s catalogue key %q names %s, which cube-cos-api does not serve by GET",
+					tool.Name, key, path)
+			}
+		}
+	}
+}
+
+// TestEverySimpleGetIsAdmittedOrHeldBack is what makes admission opt-in and
+// still visible.
+//
+// Opt-in alone would leave a read the API gains tomorrow silently unreachable:
+// safe, but nobody would know it existed, and the catalogue would quietly fall
+// behind the product. Requiring the two sets to cover the API between them
+// turns that into a failing test naming the new path, so somebody classifies
+// it. Admitting it stays a deliberate act; ignoring it stops being one.
+//
+// Scoped to GETs whose only placeholder is the datacenter, because those are
+// the reads the catalogue can express — a per-resource read needs a value set
+// or a shape for the identifier, which is a wider decision than this slice.
+func TestEverySimpleGetIsAdmittedOrHeldBack(t *testing.T) {
+	admitted := map[string]bool{}
+	for _, tool := range Allowlist {
+		for _, path := range tool.Catalog {
+			admitted[specName(BackendCubeCOS, path)] = true
+		}
+		if tool.Get != "" {
+			admitted[specName(BackendCubeCOS, tool.Get)] = true
+		}
+	}
+
+	for path := range specOps(t, BackendCubeCOS)["GET"] {
+		if strings.Contains(strings.ReplaceAll(path, specDC, ""), "{") {
+			continue // per-resource read; out of the catalogue's scope for now
+		}
+		if admitted[path] {
+			continue
+		}
+		if _, held := cubeCOSReadsHeldBack[path]; held {
+			continue
+		}
+		t.Errorf("cube-cos-api serves GET %s and this agent neither reads it nor says why not; "+
+			"add it to CubeCOSReads or to cubeCOSReadsHeldBack with the reason", path)
+	}
+}
+
+// TestNothingIsBothAdmittedAndHeldBack stops the two sets from disagreeing.
+// A path in both reads as refused to anyone scanning the reasons and is in
+// fact reachable, which is the worst of the two states to be in.
+func TestNothingIsBothAdmittedAndHeldBack(t *testing.T) {
+	for _, tool := range Allowlist {
+		for key, path := range tool.Catalog {
+			spec := specName(BackendCubeCOS, path)
+			if reason, held := cubeCOSReadsHeldBack[spec]; held {
+				t.Errorf("%s reads %q (%s) but it is also held back as %q; one of the two is wrong",
+					tool.Name, key, path, reason)
+			}
+		}
+	}
+}
+
+// TestEveryHeldBackReadIsOneTheAPIStillServes keeps the held-back list from
+// outliving the API, the same honesty the exclusion list gets: a reason
+// written about a path that no longer exists is a wrong statement, and it
+// makes the coverage test above pass for the wrong reason.
+func TestEveryHeldBackReadIsOneTheAPIStillServes(t *testing.T) {
+	gets := specOps(t, BackendCubeCOS)["GET"]
+	for path, reason := range cubeCOSReadsHeldBack {
+		if !gets[path] {
+			t.Errorf("cubeCOSReadsHeldBack lists %s (%q), which cube-cos-api no longer serves by GET; delete the entry",
+				path, reason)
+		}
 	}
 }
 

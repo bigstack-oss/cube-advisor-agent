@@ -1,109 +1,148 @@
-# cube-cos-api paths, extracted from its OpenAPI document.
+# cube-cos-api operations, extracted from its OpenAPI document.
+#
+# One "METHOD PATH" line per operation, so a check can ask not only whether the
+# API serves a path but whether it serves it the way an allowlist entry expects.
+# A Get: entry naming a path the API only POSTs to is a bug this file can catch
+# and a path-only list could not.
 #
 # Source:      bigstack-oss/cube-cos-openapi docs.yaml
 # Submodule:   09b7d76b4a8e877b9d2560528faa68b2065fc703
 # Vendored by: cube-cos-api 0458966e6af68840cc183214eba15a6e9f36c393
 #
-# Regenerate:  grep -oE "^  \"/api/v1/[^\"]*\"" docs.yaml | tr -d " \"" | sort
-/api/v1/datacenters
-/api/v1/datacenters/{dataCenter}
-/api/v1/datacenters/{dataCenter}/events
-/api/v1/datacenters/{dataCenter}/events/abstract
-/api/v1/datacenters/{dataCenter}/events/filterConditions
-/api/v1/datacenters/{dataCenter}/events/predefined
-/api/v1/datacenters/{dataCenter}/events/rank
-/api/v1/datacenters/{dataCenter}/firmwares
-/api/v1/datacenters/{dataCenter}/firmwares/abort
-/api/v1/datacenters/{dataCenter}/firmwares/continueAnyway/{nodeName}
-/api/v1/datacenters/{dataCenter}/firmwares/md5sum
-/api/v1/datacenters/{dataCenter}/firmwares/md5sum/verify
-/api/v1/datacenters/{dataCenter}/firmwares/upgradeProgress
-/api/v1/datacenters/{dataCenter}/firmwares/{version}
-/api/v1/datacenters/{dataCenter}/firmwares/{version}/{nodeName}
-/api/v1/datacenters/{dataCenter}/firmwares/{version}/updatableNodes
-/api/v1/datacenters/{dataCenter}/fixpacks
-/api/v1/datacenters/{dataCenter}/fixpacks/continueAnyway/{nodeName}
-/api/v1/datacenters/{dataCenter}/fixpacks/md5sum
-/api/v1/datacenters/{dataCenter}/fixpacks/md5sum/verify
-/api/v1/datacenters/{dataCenter}/fixpacks/updateProgress/{version}
-/api/v1/datacenters/{dataCenter}/fixpacks/{version}
-/api/v1/datacenters/{dataCenter}/fixpacks/{version}/rollback
-/api/v1/datacenters/{dataCenter}/fixpacks/{version}/rollbackableNodes
-/api/v1/datacenters/{dataCenter}/fixpacks/{version}/updatableNodes
-/api/v1/datacenters/{dataCenter}/grafana/devices/{hostname}/gpuUtilization
-/api/v1/datacenters/{dataCenter}/grafana/devices/{hostname}/gpuVram
-/api/v1/datacenters/{dataCenter}/grafana/hosts/{hostname}
-/api/v1/datacenters/{dataCenter}/grafana/instances/{instanceId}
-/api/v1/datacenters/{dataCenter}/grafana/networkDevices
-/api/v1/datacenters/{dataCenter}/grafana/networks
-/api/v1/datacenters/{dataCenter}/grafana/storages
-/api/v1/datacenters/{dataCenter}/grafana/topHosts
-/api/v1/datacenters/{dataCenter}/grafana/topInstances
-/api/v1/datacenters/{dataCenter}/healths
-/api/v1/datacenters/{dataCenter}/healths/services/{serviceType}
-/api/v1/datacenters/{dataCenter}/healths/services/{serviceType}/modules/{moduleType}
-/api/v1/datacenters/{dataCenter}/images
-/api/v1/datacenters/{dataCenter}/images.csv
-/api/v1/datacenters/{dataCenter}/images/{imageId}
-/api/v1/datacenters/{dataCenter}/images/materials
-/api/v1/datacenters/{dataCenter}/integrations/applications
-/api/v1/datacenters/{dataCenter}/integrations/storages
-/api/v1/datacenters/{dataCenter}/integrations/storages/models
-/api/v1/datacenters/{dataCenter}/integrations/storages/models/{driverName}
-/api/v1/datacenters/{dataCenter}/integrations/storages/{storageName}
-/api/v1/datacenters/{dataCenter}/integrations/storages/{storageName}/asDefault
-/api/v1/datacenters/{dataCenter}/integrations/storages/{storageName}/verify
-/api/v1/datacenters/{dataCenter}/integrations/storages/vendors
-/api/v1/datacenters/{dataCenter}/licenses
-/api/v1/datacenters/{dataCenter}/licenses/attachments
-/api/v1/datacenters/{dataCenter}/licenses/hosts/{hostname}
-/api/v1/datacenters/{dataCenter}/licenses/verify
-/api/v1/datacenters/{dataCenter}/me
-/api/v1/datacenters/{dataCenter}/metrics
-/api/v1/datacenters/{dataCenter}/metrics/{metricType}/{viewType}/{entityType}
-/api/v1/datacenters/{dataCenter}/metrics/{metricType}/{viewType}/{entityType}/{entityIdorName}
-/api/v1/datacenters/{dataCenter}/nodes
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/devices
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/devices/{deviceName}
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/gpuCards
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/gpuCards/{gpuId}
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/gpuCards/instances/{instanceId}/console
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/ipmi
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/ipmi/disconnect
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/ipmi/{operation}
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/ipmi/verify
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/osds/{osdId}
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/osds/{osdId}/restart
-/api/v1/datacenters/{dataCenter}/nodes/{nodeName}/softReboot
-/api/v1/datacenters/{dataCenter}/notifications
-/api/v1/datacenters/{dataCenter}/notifications/last
-/api/v1/datacenters/{dataCenter}/opensearch/requests/{requestId}
-/api/v1/datacenters/{dataCenter}/rollingReboot
-/api/v1/datacenters/{dataCenter}/services
-/api/v1/datacenters/{dataCenter}/settings
-/api/v1/datacenters/{dataCenter}/settings/email/recipients
-/api/v1/datacenters/{dataCenter}/settings/email/recipients/{recipientEmail}
-/api/v1/datacenters/{dataCenter}/settings/email/senders
-/api/v1/datacenters/{dataCenter}/settings/email/senders/{senderHost}
-/api/v1/datacenters/{dataCenter}/settings/slack/channels
-/api/v1/datacenters/{dataCenter}/settings/slack/channels/{channelName}
-/api/v1/datacenters/{dataCenter}/settings/titlePrefix
-/api/v1/datacenters/{dataCenter}/supportFiles
-/api/v1/datacenters/{dataCenter}/supportFiles/hosts/{hostname}
-/api/v1/datacenters/{dataCenter}/supportFiles/{supportFileSet}
-/api/v1/datacenters/{dataCenter}/tokens
-/api/v1/datacenters/{dataCenter}/triggers
-/api/v1/datacenters/{dataCenter}/triggers/materials
-/api/v1/datacenters/{dataCenter}/triggers/materials/script/verify
-/api/v1/datacenters/{dataCenter}/triggers/{triggerName}
-/api/v1/datacenters/{dataCenter}/triggers/{triggerName}/enable
-/api/v1/datacenters/{dataCenter}/tunings/parameters
-/api/v1/datacenters/{dataCenter}/tunings/parameters/{parameterName}
-/api/v1/datacenters/{dataCenter}/tunings/parameters/{parameterName}/enable
-/api/v1/datacenters/{dataCenter}/tunings/parameters/{parameterName}/reset
-/api/v1/datacenters/{dataCenter}/tunings/specs
-/api/v1/datacenters/{dataCenter}/volumes
-/api/v1/datacenters/{dataCenter}/volumes.csv
-/api/v1/datacenters/{dataCenter}/volumes/images
-/api/v1/logout
+# Regenerate:  awk '
+#                /^  "\/api\/v1\// { p=$0; gsub(/^  "/,"",p); gsub(/":$/,"",p); next }
+#                /^    (get|post|put|patch|delete|head|options):$/ && p != "" {
+#                  m=$1; sub(/:$/,"",m); print toupper(m) " " p }
+#              ' docs.yaml | sort -u
+DELETE /api/v1/datacenters/{dataCenter}/firmwares/{version}
+DELETE /api/v1/datacenters/{dataCenter}/fixpacks/{version}
+DELETE /api/v1/datacenters/{dataCenter}/integrations/storages/models/{driverName}
+DELETE /api/v1/datacenters/{dataCenter}/integrations/storages/{storageName}
+DELETE /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/devices/{deviceName}
+DELETE /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/ipmi/disconnect
+DELETE /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/osds/{osdId}
+DELETE /api/v1/datacenters/{dataCenter}/settings/email/recipients/{recipientEmail}
+DELETE /api/v1/datacenters/{dataCenter}/settings/email/senders/{senderHost}
+DELETE /api/v1/datacenters/{dataCenter}/settings/slack/channels/{channelName}
+DELETE /api/v1/datacenters/{dataCenter}/supportFiles/{supportFileSet}
+DELETE /api/v1/datacenters/{dataCenter}/triggers/{triggerName}
+GET /api/v1/datacenters
+GET /api/v1/datacenters/{dataCenter}
+GET /api/v1/datacenters/{dataCenter}/events
+GET /api/v1/datacenters/{dataCenter}/events/abstract
+GET /api/v1/datacenters/{dataCenter}/events/filterConditions
+GET /api/v1/datacenters/{dataCenter}/events/predefined
+GET /api/v1/datacenters/{dataCenter}/events/rank
+GET /api/v1/datacenters/{dataCenter}/firmwares
+GET /api/v1/datacenters/{dataCenter}/firmwares/upgradeProgress
+GET /api/v1/datacenters/{dataCenter}/firmwares/{version}/updatableNodes
+GET /api/v1/datacenters/{dataCenter}/fixpacks
+GET /api/v1/datacenters/{dataCenter}/fixpacks/updateProgress/{version}
+GET /api/v1/datacenters/{dataCenter}/fixpacks/{version}/rollbackableNodes
+GET /api/v1/datacenters/{dataCenter}/fixpacks/{version}/updatableNodes
+GET /api/v1/datacenters/{dataCenter}/grafana/devices/{hostname}/gpuUtilization
+GET /api/v1/datacenters/{dataCenter}/grafana/devices/{hostname}/gpuVram
+GET /api/v1/datacenters/{dataCenter}/grafana/hosts/{hostname}
+GET /api/v1/datacenters/{dataCenter}/grafana/instances/{instanceId}
+GET /api/v1/datacenters/{dataCenter}/grafana/networkDevices
+GET /api/v1/datacenters/{dataCenter}/grafana/networks
+GET /api/v1/datacenters/{dataCenter}/grafana/storages
+GET /api/v1/datacenters/{dataCenter}/grafana/topHosts
+GET /api/v1/datacenters/{dataCenter}/grafana/topInstances
+GET /api/v1/datacenters/{dataCenter}/healths
+GET /api/v1/datacenters/{dataCenter}/healths/services/{serviceType}
+GET /api/v1/datacenters/{dataCenter}/healths/services/{serviceType}/modules/{moduleType}
+GET /api/v1/datacenters/{dataCenter}/images
+GET /api/v1/datacenters/{dataCenter}/images.csv
+GET /api/v1/datacenters/{dataCenter}/images/materials
+GET /api/v1/datacenters/{dataCenter}/integrations/applications
+GET /api/v1/datacenters/{dataCenter}/integrations/storages
+GET /api/v1/datacenters/{dataCenter}/integrations/storages/models
+GET /api/v1/datacenters/{dataCenter}/integrations/storages/{storageName}
+GET /api/v1/datacenters/{dataCenter}/integrations/storages/vendors
+GET /api/v1/datacenters/{dataCenter}/licenses
+GET /api/v1/datacenters/{dataCenter}/licenses/attachments
+GET /api/v1/datacenters/{dataCenter}/me
+GET /api/v1/datacenters/{dataCenter}/metrics
+GET /api/v1/datacenters/{dataCenter}/metrics/{metricType}/{viewType}/{entityType}
+GET /api/v1/datacenters/{dataCenter}/metrics/{metricType}/{viewType}/{entityType}/{entityId or Name}
+GET /api/v1/datacenters/{dataCenter}/nodes
+GET /api/v1/datacenters/{dataCenter}/nodes/{nodeName}
+GET /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/devices
+GET /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/gpuCards
+GET /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/gpuCards/instances/{instanceId}/console
+GET /api/v1/datacenters/{dataCenter}/notifications
+GET /api/v1/datacenters/{dataCenter}/notifications/last
+GET /api/v1/datacenters/{dataCenter}/opensearch/requests/{requestId}
+GET /api/v1/datacenters/{dataCenter}/services
+GET /api/v1/datacenters/{dataCenter}/settings
+GET /api/v1/datacenters/{dataCenter}/settings/email/recipients
+GET /api/v1/datacenters/{dataCenter}/settings/email/senders
+GET /api/v1/datacenters/{dataCenter}/settings/slack/channels
+GET /api/v1/datacenters/{dataCenter}/supportFiles
+GET /api/v1/datacenters/{dataCenter}/supportFiles/hosts/{hostname}
+GET /api/v1/datacenters/{dataCenter}/triggers
+GET /api/v1/datacenters/{dataCenter}/triggers/materials
+GET /api/v1/datacenters/{dataCenter}/triggers/{triggerName}
+GET /api/v1/datacenters/{dataCenter}/tunings/parameters
+GET /api/v1/datacenters/{dataCenter}/tunings/specs
+GET /api/v1/datacenters/{dataCenter}/volumes
+GET /api/v1/datacenters/{dataCenter}/volumes.csv
+PATCH /api/v1/datacenters/{dataCenter}/firmwares
+PATCH /api/v1/datacenters/{dataCenter}/firmwares/{version}/{nodeName}
+PATCH /api/v1/datacenters/{dataCenter}/fixpacks
+PATCH /api/v1/datacenters/{dataCenter}/healths
+PATCH /api/v1/datacenters/{dataCenter}/healths/services/{serviceType}/modules/{moduleType}
+PATCH /api/v1/datacenters/{dataCenter}/images/{imageId}
+PATCH /api/v1/datacenters/{dataCenter}/integrations/storages/models/{driverName}
+PATCH /api/v1/datacenters/{dataCenter}/integrations/storages/{storageName}
+PATCH /api/v1/datacenters/{dataCenter}/integrations/storages/{storageName}/asDefault
+PATCH /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/devices/{deviceName}
+PATCH /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/osds/{osdId}
+PATCH /api/v1/datacenters/{dataCenter}/settings/email/senders/{senderHost}
+PATCH /api/v1/datacenters/{dataCenter}/triggers/{triggerName}
+PATCH /api/v1/datacenters/{dataCenter}/triggers/{triggerName}/enable
+PATCH /api/v1/datacenters/{dataCenter}/tunings/parameters/{parameterName}
+PATCH /api/v1/datacenters/{dataCenter}/tunings/parameters/{parameterName}/enable
+POST /api/v1/datacenters/{dataCenter}/firmwares
+POST /api/v1/datacenters/{dataCenter}/firmwares/abort
+POST /api/v1/datacenters/{dataCenter}/firmwares/continueAnyway/{nodeName}
+POST /api/v1/datacenters/{dataCenter}/firmwares/md5sum
+POST /api/v1/datacenters/{dataCenter}/firmwares/md5sum/verify
+POST /api/v1/datacenters/{dataCenter}/fixpacks
+POST /api/v1/datacenters/{dataCenter}/fixpacks/continueAnyway/{nodeName}
+POST /api/v1/datacenters/{dataCenter}/fixpacks/md5sum
+POST /api/v1/datacenters/{dataCenter}/fixpacks/md5sum/verify
+POST /api/v1/datacenters/{dataCenter}/fixpacks/{version}/rollback
+POST /api/v1/datacenters/{dataCenter}/images
+POST /api/v1/datacenters/{dataCenter}/integrations/storages
+POST /api/v1/datacenters/{dataCenter}/integrations/storages/models
+POST /api/v1/datacenters/{dataCenter}/integrations/storages/{storageName}/verify
+POST /api/v1/datacenters/{dataCenter}/licenses
+POST /api/v1/datacenters/{dataCenter}/licenses/hosts/{hostname}
+POST /api/v1/datacenters/{dataCenter}/licenses/verify
+POST /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/devices
+POST /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/ipmi
+POST /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/ipmi/{operation}
+POST /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/ipmi/verify
+POST /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/osds/{osdId}/restart
+POST /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/softReboot
+POST /api/v1/datacenters/{dataCenter}/rollingReboot
+POST /api/v1/datacenters/{dataCenter}/settings/email/recipients
+POST /api/v1/datacenters/{dataCenter}/settings/email/recipients/{recipientEmail}
+POST /api/v1/datacenters/{dataCenter}/settings/email/senders
+POST /api/v1/datacenters/{dataCenter}/settings/email/senders/{senderHost}
+POST /api/v1/datacenters/{dataCenter}/settings/slack/channels
+POST /api/v1/datacenters/{dataCenter}/settings/slack/channels/{channelName}
+POST /api/v1/datacenters/{dataCenter}/supportFiles
+POST /api/v1/datacenters/{dataCenter}/tokens
+POST /api/v1/datacenters/{dataCenter}/triggers
+POST /api/v1/datacenters/{dataCenter}/triggers/materials/script/verify
+POST /api/v1/datacenters/{dataCenter}/tunings/parameters/{parameterName}/reset
+POST /api/v1/datacenters/{dataCenter}/volumes/images
+POST /api/v1/logout
+PUT /api/v1/datacenters/{dataCenter}/integrations/storages/models
+PUT /api/v1/datacenters/{dataCenter}/nodes/{nodeName}/gpuCards/{gpuId}
+PUT /api/v1/datacenters/{dataCenter}/settings/email/recipients/{recipientEmail}
+PUT /api/v1/datacenters/{dataCenter}/settings/slack/channels/{channelName}
+PUT /api/v1/datacenters/{dataCenter}/settings/titlePrefix

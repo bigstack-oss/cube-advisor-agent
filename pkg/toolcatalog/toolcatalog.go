@@ -38,6 +38,16 @@ type Entry struct {
 	// comparison that ignored the distinction would demand the two lists
 	// match when they legitimately do not.
 	Probe bool
+
+	// Reads is the sorted set of catalogue keys this entry accepts, empty for
+	// a tool that is not a catalogue read.
+	//
+	// Published for the same reason the names are: the SaaS has to tell the
+	// model which reads exist, and a list of keys typed out over there is a
+	// copy of this one. The keys remain advice on that side — the executor's
+	// map is the enforcement, and a stale SaaS must not veto a key a newer
+	// executor serves.
+	Reads []string
 }
 
 // Entries returns every tool the executor can serve, sorted by name.
@@ -49,11 +59,26 @@ type Entry struct {
 func Entries() []Entry {
 	out := make([]Entry, 0, len(toolplane.Allowlist)+len(toolplane.ProbeControls))
 	for _, t := range toolplane.Allowlist {
-		out = append(out, Entry{Name: t.Name, Impact: t.Impact.String()})
+		out = append(out, Entry{Name: t.Name, Impact: t.Impact.String(), Reads: readsOf(t)})
 	}
 	for _, t := range toolplane.ProbeControls {
 		out = append(out, Entry{Name: t.Name, Impact: t.Impact.String(), Probe: true})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// readsOf returns a catalogue tool's keys, sorted. Sorted because a map's
+// order is not one, and a published list whose order changes between calls
+// makes a comparison on the other side flap for no reason.
+func readsOf(t toolplane.Tool) []string {
+	if len(t.Catalog) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(t.Catalog))
+	for k := range t.Catalog {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

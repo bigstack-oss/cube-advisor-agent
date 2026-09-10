@@ -373,6 +373,10 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 		return r.callGet(ctx, tool, args)
 	}
 
+	if len(tool.Catalog) > 0 {
+		return r.callCatalogGet(ctx, tool, args)
+	}
+
 	if tool.Post != "" {
 		return r.callPost(ctx, tool, args)
 	}
@@ -495,6 +499,55 @@ func (r *Registry) callGet(ctx context.Context, tool Tool, args map[string]strin
 		return nil, fmt.Errorf("%w: %v", ErrBadArgument, err)
 	}
 
+	return r.fetch(ctx, tool, path, args)
+}
+
+// callCatalogGet dispatches a catalogue read: the caller names a key, the
+// allowlist owns the path.
+//
+// The key is checked by map lookup, which is the finite-value-set rule in its
+// strongest form — there is no grammar to get wrong and no value outside the
+// set to reject, because a value outside the set simply is not a key. A miss
+// is refused the same way an out-of-set parameter is, and audited, so a caller
+// probing for paths writes a line per attempt in the customer's own log.
+func (r *Registry) callCatalogGet(ctx context.Context, tool Tool, args map[string]string) ([]byte, error) {
+	refuse := func(err error) ([]byte, error) {
+		r.audit.RecordToolCall(ToolCall{
+			Tool: tool.Name, Args: args, Allowed: false,
+			Reason: err.Error(), At: time.Now().UTC(),
+		})
+		return nil, fmt.Errorf("%w: %v", ErrBadArgument, err)
+	}
+	for k := range args {
+		if k != catalogArg {
+			return refuse(fmt.Errorf("unexpected argument %q", k))
+		}
+	}
+	key, given := args[catalogArg]
+	if !given {
+		return refuse(fmt.Errorf("missing argument %s", catalogArg))
+	}
+	template, ok := tool.Catalog[key]
+	if !ok {
+		// Naming the argument but not the catalogue: which reads exist is in
+		// the tool's schema, where the model already saw it, and echoing the
+		// set on every miss would turn a refusal into a directory listing.
+		return refuse(fmt.Errorf("value for %s is not one this tool reads", catalogArg))
+	}
+	if r.datacenter == "" {
+		return refuse(fmt.Errorf("cube-cos-api access is not configured on this agent"))
+	}
+	path := strings.ReplaceAll(template, dcPlaceholder, r.datacenter)
+	return r.fetch(ctx, tool, path, args)
+}
+
+// fetch performs a resolved cube-cos-api GET, caps it, and audits the outcome.
+//
+// Both read forms end here so the cap, the truncation marker and the audit
+// record are written once. A second copy of this would be a second place for
+// the marker to go missing, and tool-0010 measures whether the model reports a
+// cut — which it cannot do if the executor forgot to say there was one.
+func (r *Registry) fetch(ctx context.Context, tool Tool, path string, args map[string]string) ([]byte, error) {
 	max := tool.MaxOutputBytes
 	if max <= 0 {
 		max = defaultMaxOutputBytes
