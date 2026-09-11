@@ -38,6 +38,8 @@ func runCmd(args []string) int {
 		"append-only audit log of every tool call served")
 	probes := fs.Bool("probes", false,
 		"serve the probe plane: bounded measurements that create and delete their own scratch storage")
+	webTargets := fs.String("web-targets", "/etc/cube-advisor-agent/web-targets.json",
+		"JSON map of symbolic web target names to host:port this node may proxy; absent means none")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -51,6 +53,11 @@ func runCmd(args []string) int {
 	id, err := identity.Load(*dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: no usable identity in %s (enroll first): %v\n", *dir, err)
+		return exitFailed
+	}
+	webAllow, err := console.LoadWebAllowlist(*webTargets)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return exitFailed
 	}
 	fp, err := id.Fingerprint()
@@ -171,11 +178,12 @@ func runCmd(args []string) int {
 	srv := &agent.Server{
 		Tools:   reg,
 		Console: &console.Handler{NodeID: id.NodeID},
+		Web:     &console.WebHandler{Allow: webAllow},
 	}
 	backoff := tunnel.DefaultBackoff()
 	guard := tunnel.DefaultFlapGuard()
-	log.Printf("agent %s: serving %d tools and a console for %s/%s via %s",
-		version, len(reg.Names()), id.ClusterID, id.NodeID, serverAddr)
+	log.Printf("agent %s: serving %d tools, a console and %d web targets for %s/%s via %s",
+		version, len(reg.Names()), len(webAllow), id.ClusterID, id.NodeID, serverAddr)
 
 	// Serve until told to stop. Each session ending — network flap, SaaS
 	// restart, supersession by a newer agent — is a reason to reconnect, not
