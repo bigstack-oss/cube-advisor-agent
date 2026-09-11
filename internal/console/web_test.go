@@ -1,10 +1,14 @@
 package console_test
 
 import (
+	"context"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/bigstack-oss/cube-advisor-agent/internal/console"
 )
@@ -57,5 +61,74 @@ func TestAMissingAllowlistIsEmptyNotFatal(t *testing.T) {
 	}
 	if len(a) != 0 {
 		t.Errorf("missing file produced %d entries", len(a))
+	}
+}
+
+// A web channel reaches the allowlisted address and nothing else, and what
+// crosses it is bytes — the agent parses no HTTP.
+func TestAWebChannelPipesToTheAllowlistedAddress(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(c, buf); err != nil {
+			return
+		}
+		_, _ = c.Write([]byte("PONG:" + string(buf)))
+	}()
+
+	p := writeAllowlist(t, `{"dashboard":"`+ln.Addr().String()+`"}`)
+	a, err := console.LoadWebAllowlist(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &console.WebHandler{Allow: a}
+
+	client, server := net.Pipe()
+	go func() { _ = h.Serve(context.Background(), "dashboard", server) }()
+	defer client.Close()
+
+	if _, err := client.Write([]byte("PING")); err != nil {
+		t.Fatal(err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	got := make([]byte, 9)
+	if _, err := io.ReadFull(client, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "PONG:PING" {
+		t.Errorf("through the channel: %q", got)
+	}
+}
+
+// An unlisted name never reaches a dialler at all.
+func TestAnUnlistedWebTargetIsNeverDialled(t *testing.T) {
+	p := writeAllowlist(t, `{"dashboard":"127.0.0.1:9"}`)
+	a, err := console.LoadWebAllowlist(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialled := false
+	h := &console.WebHandler{
+		Allow: a,
+		Dial: func(context.Context, string) (net.Conn, error) {
+			dialled = true
+			return nil, errors.New("should not happen")
+		},
+	}
+	_, server := net.Pipe()
+	if err := h.Serve(context.Background(), "etcd", server); !errors.Is(err, console.ErrNotAllowed) {
+		t.Errorf("unlisted target: %v, want ErrNotAllowed", err)
+	}
+	if dialled {
+		t.Error("an unlisted target reached the dialler")
 	}
 }
