@@ -1,9 +1,11 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 )
@@ -49,4 +51,36 @@ func (a WebAllowlist) Resolve(name string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrNotAllowed, name)
 	}
 	return hostport, nil
+}
+
+// WebHandler serves web channels for one node.
+type WebHandler struct {
+	// Allow is the only source of addresses. Empty refuses everything.
+	Allow WebAllowlist
+
+	// Dial opens the upstream connection; nil uses a real TCP dialler.
+	Dial Dialer
+}
+
+// Serve pipes rw to the allowlisted address for name.
+//
+// Bytes only: the agent parses no HTTP, so there is no request it can be
+// tricked into rewriting.
+func (h *WebHandler) Serve(ctx context.Context, name string, rw io.ReadWriter) error {
+	hostport, err := h.Allow.Resolve(name)
+	if err != nil {
+		return err
+	}
+	dial := h.Dial
+	if dial == nil {
+		dial = defaultDialer
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
+	defer cancel()
+	conn, err := dial(dialCtx, hostport)
+	if err != nil {
+		return fmt.Errorf("console: dial web target %q: %w", name, err)
+	}
+	defer conn.Close()
+	return pipe(ctx, rw, conn)
 }

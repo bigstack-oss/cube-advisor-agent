@@ -35,6 +35,10 @@ type Server struct {
 	// must not guess which node it is.
 	Console *console.Handler
 
+	// Web serves web channels. Nil refuses them, which is the default: a node
+	// exposes no web target until one is configured.
+	Web *console.WebHandler
+
 	// CallTimeout bounds one tool call end to end. Zero uses the default.
 	CallTimeout time.Duration
 }
@@ -116,18 +120,25 @@ func (s *Server) handle(ctx context.Context, ch *tunnel.Channel) {
 	}
 }
 
-// serveConsole pipes a console channel to this node's own sshd.
+// serveConsole pipes a console channel to this node's sshd or an allowlisted web endpoint.
 //
 // Every refusal returns the same generic reason. The distinctions — wrong
 // node, no sshd, console not configured — are logged here, on the node, and
 // never sent: a SaaS that could tell them apart could map the cluster by
 // asking for names and watching which answer differently.
 func (s *Server) serveConsole(ctx context.Context, ch *tunnel.Channel) {
-	if ch.Open.Target.Kind != tunnelproto.TargetSSH {
+	switch ch.Open.Target.Kind {
+	case tunnelproto.TargetSSH:
+		s.serveSSHConsole(ctx, ch)
+	case tunnelproto.TargetWeb:
+		s.serveWebConsole(ctx, ch)
+	default:
 		log.Printf("agent: console channel refused, target kind %q", ch.Open.Target.Kind)
 		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
-		return
 	}
+}
+
+func (s *Server) serveSSHConsole(ctx context.Context, ch *tunnel.Channel) {
 	if s.Console == nil {
 		log.Printf("agent: console channel refused, no console handler configured")
 		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
@@ -135,6 +146,17 @@ func (s *Server) serveConsole(ctx context.Context, ch *tunnel.Channel) {
 	}
 	if err := s.Console.Serve(ctx, ch.Open.Target.Name, ch); err != nil {
 		log.Printf("agent: console channel for %q ended: %v", ch.Open.Target.Name, err)
+	}
+}
+
+func (s *Server) serveWebConsole(ctx context.Context, ch *tunnel.Channel) {
+	if s.Web == nil {
+		log.Printf("agent: web channel refused, no web targets configured")
+		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
+		return
+	}
+	if err := s.Web.Serve(ctx, ch.Open.Target.Name, ch); err != nil {
+		log.Printf("agent: web channel for %q ended: %v", ch.Open.Target.Name, err)
 	}
 }
 
