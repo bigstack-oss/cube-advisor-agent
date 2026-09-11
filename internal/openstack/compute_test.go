@@ -263,3 +263,60 @@ func TestAKeystoneRefusalNeverQuotesTheSecret(t *testing.T) {
 		t.Errorf("the error carries the secret: %v", err)
 	}
 }
+
+// The body is verbatim from a CubeCOS cluster's Keystone (lab validation,
+// 2026-09-11), which ships methods = password,token,oauth1,mapped. An
+// application credential can be created there and never redeemed; the message
+// this replaces sent the reader to check a credential that was fine.
+func TestAKeystoneThatCannotRedeemApplicationCredentialsSaysSo(t *testing.T) {
+	const body = `{"error":{"code":401,"identity":{"methods":["password","token","oauth1","mapped"]},` +
+		`"message":"Attempted to authenticate with an unsupported method.","title":"Unauthorized"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	c, _ := NewCompute(Credential{
+		AuthURL: srv.URL + "/v3", ID: "abc123", Secret: testSecret, Project: "acme-prod",
+	})
+	_, err := c.Post(context.Background(), "/servers", []byte(`{}`), "", 1<<16)
+	if err == nil {
+		t.Fatal("a 401 was accepted")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "does not enable") {
+		t.Errorf("the refusal does not name the unsupported method: %v", err)
+	}
+	if !strings.Contains(msg, "password") {
+		t.Errorf("the refusal does not say what this Keystone does accept: %v", err)
+	}
+	if strings.Contains(msg, "has not been revoked") {
+		t.Errorf("the refusal still blames the credential: %v", err)
+	}
+	if strings.Contains(msg, testSecret) {
+		t.Errorf("the error carries the secret: %v", err)
+	}
+}
+
+// A 401 that is not about the method keeps the original wording: a revoked or
+// mistyped credential is still the common case, and this test fails if the new
+// branch swallows it.
+func TestAnOrdinaryKeystoneRefusalStillBlamesTheCredential(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"code":401,"title":"Unauthorized"}}`))
+	}))
+	defer srv.Close()
+
+	c, _ := NewCompute(Credential{
+		AuthURL: srv.URL + "/v3", ID: "abc123", Secret: testSecret, Project: "acme-prod",
+	})
+	_, err := c.Post(context.Background(), "/servers", []byte(`{}`), "", 1<<16)
+	if err == nil {
+		t.Fatal("a 401 was accepted")
+	}
+	if !strings.Contains(err.Error(), "has not been revoked") {
+		t.Errorf("an ordinary 401 lost its wording: %v", err)
+	}
+}

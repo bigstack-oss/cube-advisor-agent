@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -127,6 +128,13 @@ func (c *Compute) authenticate(ctx context.Context) (string, string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		if methods, ok := supportedMethods(resp.Body); ok && !slices.Contains(methods, applicationCredentialMethod) {
+			return "", "", fmt.Errorf(
+				"openstack: this Keystone does not enable the %s authentication method (it offers %s), "+
+					"so an application credential cannot be redeemed here however it was created; "+
+					"add it to [auth] methods in keystone.conf, or give this agent a credential of a kind it accepts",
+				applicationCredentialMethod, strings.Join(methods, ", "))
+		}
 		// No body: a Keystone error can echo the request, and the request
 		// holds the secret.
 		return "", "", fmt.Errorf("openstack: Keystone refused the application credential (HTTP %d); "+
@@ -164,6 +172,37 @@ func (c *Compute) authenticate(ctx context.Context) (string, string, error) {
 	c.token, c.expires, c.endpoint = tok, tr.Token.ExpiresAt, endpoint
 	c.mu.Unlock()
 	return tok, endpoint, nil
+}
+
+// applicationCredentialMethod is the Keystone auth method this client uses.
+const applicationCredentialMethod = "application_credential"
+
+// supportedMethods reads the auth methods a Keystone rejection advertises.
+//
+// Keystone answers an unsupported method with the list it does support, and
+// that list is the one thing in the error body worth reading: it separates "the
+// credential is wrong" from "this deployment cannot redeem this kind of
+// credential at all", which are different problems with different owners. Only
+// the method names are taken — never error.message and never the body — because
+// a Keystone error can echo the request, and the request holds the secret.
+//
+// Found on a CubeCOS cluster, whose keystone.conf ships
+// methods = password,token,oauth1,mapped: application credentials can be
+// created there and never redeemed, and the old message sent the reader to
+// check a credential that was fine.
+func supportedMethods(r io.Reader) ([]string, bool) {
+	var body struct {
+		Error struct {
+			Identity struct {
+				Methods []string `json:"methods"`
+			} `json:"identity"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r, 1<<16)).Decode(&body); err != nil {
+		return nil, false
+	}
+	m := body.Error.Identity.Methods
+	return m, len(m) > 0
 }
 
 // computeEndpoint picks the compute service URL from the catalog.
