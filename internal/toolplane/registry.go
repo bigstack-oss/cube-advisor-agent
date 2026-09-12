@@ -118,7 +118,7 @@ type CubeCOSGetter interface {
 type notConfigured struct{}
 
 func (notConfigured) Get(context.Context, string, int) ([]byte, error) {
-	return nil, fmt.Errorf("cube-cos-api access is not configured on this agent")
+	return nil, errNoCubeCOSAccess()
 }
 
 // New builds a registry from tools, refusing to start if any is malformed.
@@ -561,7 +561,7 @@ func (r *Registry) callCatalogGet(ctx context.Context, tool Tool, args map[strin
 		return refuse(fmt.Errorf("value for %s is not one this tool reads", catalogArg))
 	}
 	if r.datacenter == "" {
-		return refuse(fmt.Errorf("cube-cos-api access is not configured on this agent"))
+		return refuse(errNoCubeCOSAccess())
 	}
 	path := strings.ReplaceAll(template, dcPlaceholder, r.datacenter)
 	return r.fetch(ctx, tool, path, args)
@@ -625,7 +625,7 @@ func (t Tool) resolvePath(args map[string]string, datacenter string) (string, er
 		}
 		if seg == dcPlaceholder {
 			if datacenter == "" {
-				return "", fmt.Errorf("cube-cos-api access is not configured on this agent")
+				return "", errNoCubeCOSAccess()
 			}
 			out = append(out, datacenter)
 			continue

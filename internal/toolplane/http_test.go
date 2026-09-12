@@ -182,6 +182,13 @@ func TestTheShippedCatalogueReadKeepsTheOverviewsItReplaced(t *testing.T) {
 	// became keys of one catalogue tool. Named here rather than left to the
 	// coverage test, because widening a surface must not quietly narrow it:
 	// this is the assertion that the replacement lost nothing.
+	//
+	// events is no longer among them, and its absence is not a narrowing. The
+	// tool it replaced was a bare GET of the same path, and a live cluster
+	// answers that 400: the endpoint requires a type query parameter, which
+	// neither form can supply. cube_cos_events shipped broken and unexercised,
+	// the catalogue inherited it, and reading a real api is what found it. The
+	// two events reads that need no parameter stay admitted.
 	var catalog map[string]string
 	for _, tool := range Allowlist {
 		if len(tool.Catalog) > 0 {
@@ -191,7 +198,7 @@ func TestTheShippedCatalogueReadKeepsTheOverviewsItReplaced(t *testing.T) {
 	if catalog == nil {
 		t.Fatal("no catalogue read ships in the allowlist")
 	}
-	for _, want := range []string{"healths", "nodes", "events"} {
+	for _, want := range []string{"healths", "nodes", "events/filterConditions", "events/predefined"} {
 		if catalog[want] == "" {
 			t.Errorf("the catalogue no longer reads %q, which shipped as its own tool", want)
 		}

@@ -381,11 +381,8 @@ type Tool struct {
 var CubeCOSReads = map[string]string{
 	"datacenter":              "/api/v1/datacenters/{dc}",
 	"datacenters":             "/api/v1/datacenters",
-	"events":                  "/api/v1/datacenters/{dc}/events",
-	"events/abstract":         "/api/v1/datacenters/{dc}/events/abstract",
 	"events/filterConditions": "/api/v1/datacenters/{dc}/events/filterConditions",
 	"events/predefined":       "/api/v1/datacenters/{dc}/events/predefined",
-	"events/rank":             "/api/v1/datacenters/{dc}/events/rank",
 	"firmwares":               "/api/v1/datacenters/{dc}/firmwares",
 	"firmwares/upgrade":       "/api/v1/datacenters/{dc}/firmwares/upgradeProgress",
 	"fixpacks":                "/api/v1/datacenters/{dc}/fixpacks",
@@ -409,7 +406,25 @@ var CubeCOSReads = map[string]string{
 // API between them. That is what makes admission opt-in and still visible: a
 // read this agent will not perform is a decision written down, not an absence
 // somebody has to notice.
+// eventsNeedAType is why three of the events reads are held back.
+//
+// They are zero-parameter GETs in the OpenAPI document and 400s on a real
+// cluster: cube-cos-api answers "'type' can't be null and should be one of
+// 'system', 'host', or 'instance'". A required query parameter is not
+// something the spec check can see — the path exists and the method is GET —
+// and not something this catalogue can supply, because a key selects a path
+// and nothing else. Admitting them would offer the model three reads that can
+// only ever fail.
+//
+// Found by reading a live cluster, which is the only thing that could have
+// found it. events/filterConditions and events/predefined need no parameter
+// and stay admitted.
+const eventsNeedAType = "needs a type query parameter the catalogue cannot express; returns 400 without one"
+
 var cubeCOSReadsHeldBack = map[string]string{
+	"/api/v1/datacenters/{dataCenter}/events":                    eventsNeedAType,
+	"/api/v1/datacenters/{dataCenter}/events/abstract":           eventsNeedAType,
+	"/api/v1/datacenters/{dataCenter}/events/rank":               eventsNeedAType,
 	"/api/v1/datacenters/{dataCenter}/settings":                  "configuration, and the delivery settings under it carry credentials",
 	"/api/v1/datacenters/{dataCenter}/settings/email/recipients": "email delivery configuration",
 	"/api/v1/datacenters/{dataCenter}/settings/email/senders":    "email delivery configuration, sender credentials included",

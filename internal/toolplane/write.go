@@ -64,11 +64,12 @@ const (
 // The file name is carried so an unconfigured create can say which file to
 // write. "This agent has no flavor configured" is true and leaves an operator
 // hunting; naming the file is the difference between a message they can read
-// and one they can act on. An empty value means no file supplies it yet —
-// {dc} until cube-cos-api access becomes a setting — and the refusal falls
-// back to the shorter wording rather than inventing a path.
+// and one they can act on. An empty value means no file supplies it yet, and
+// the refusal falls back to the shorter wording rather than inventing a path;
+// {dc} was the last such placeholder until cube-cos-api access became a
+// setting of its own.
 var executorFilled = map[string]string{
-	dcPlaceholder:      "",
+	dcPlaceholder:      CubeCOSFileName,
 	flavorPlaceholder:  ProfileFileName,
 	imagePlaceholder:   ProfileFileName,
 	networkPlaceholder: ProfileFileName,

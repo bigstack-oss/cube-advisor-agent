@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/bigstack-oss/cube-advisor-agent/internal/cubecosapi"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/openstack"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 )
@@ -44,7 +45,7 @@ type settingState struct {
 
 // settings is every per-cluster setting this agent reads. Adding one is adding
 // an entry here, and there is no second place to forget.
-var settings = []setting{actionLevel, instanceProfile, openStackCredential}
+var settings = []setting{actionLevel, cubeCOSAccess, instanceProfile, openStackCredential}
 
 // actionLevel is the cluster's own action level (ADR 0011).
 //
@@ -66,6 +67,47 @@ var actionLevel = setting{
 		}
 		st.line = fmt.Sprintf("action level: %s", level)
 		return st
+	},
+}
+
+// cubeCOSAccess is where this node's cube-cos-api is and what to call the
+// cluster when asking it (ADR 0016, slice 4).
+//
+// Absent is the ordinary state and not an error: the read catalogue's 21 paths
+// refuse, naming the file that would enable them. Enrolling an agent and
+// granting it the cluster's own inventory are separate decisions, so this one
+// is made by writing a file rather than by enrolling.
+//
+// The client is built here rather than inside toolplane because the base URL
+// and the node token are its own: the getter interface exists precisely so
+// neither reaches the package that writes the audit log.
+var cubeCOSAccess = setting{
+	name: "cube-cos-api access",
+	file: toolplane.CubeCOSFileName,
+	load: func(dir string) settingState {
+		access, err := toolplane.ReadCubeCOSAccess(dir)
+		switch {
+		case errors.Is(err, toolplane.ErrNoCubeCOS):
+			return settingState{line: "cube-cos-api access: not configured; reads will refuse until it is"}
+		case err != nil:
+			return settingState{
+				broken: true,
+				line:   fmt.Sprintf("cube-cos-api access: %v; reads will refuse until it is corrected", err),
+			}
+		}
+		client, err := cubecosapi.New(access.BaseURL)
+		if err != nil {
+			return settingState{
+				broken: true,
+				line:   fmt.Sprintf("cube-cos-api access: %v; reads will refuse until it is corrected", err),
+			}
+		}
+		return settingState{
+			line: fmt.Sprintf("cube-cos-api access: datacenter %s at %s", access.Datacenter, access.BaseURL),
+			apply: func(r *toolplane.Registry) {
+				r.ConfigureCubeCOS(access.Datacenter, client)
+			},
+		}
 	},
 }
 

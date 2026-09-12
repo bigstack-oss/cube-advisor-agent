@@ -59,6 +59,15 @@ func effects(t *testing.T) []effect {
 			observe: func(r *toolplane.Registry) string { return r.Level().String() },
 		},
 		{
+			name:    "cube-cos-api access",
+			file:    toolplane.CubeCOSFileName,
+			content: `{"datacenter":"cube-combined","base_url":"http://10.32.1.200:8082"}` + "\n",
+			// The instance profile's rule: no secret in the file, but whoever
+			// may write it chooses where the node token is sent.
+			mode:    0o644,
+			observe: func(r *toolplane.Registry) string { return r.Datacenter() },
+		},
+		{
 			name:    "instance profile",
 			file:    toolplane.ProfileFileName,
 			content: `{"flavor":"m1.large","image":"ubuntu-24.04","network":"tenant-net"}` + "\n",
