@@ -230,6 +230,22 @@ func (r *Registry) ConfigureWriter(b Backend, pw Poster) {
 	}
 }
 
+// Writers reports the backends with an authenticated write client wired, in a
+// stable order.
+//
+// ConfigureWriter's observable counterpart. Without it, a credential on disk
+// reaching this registry is only visible by making a call, so nothing could
+// assert the wiring without a network — which is how ConfigureInstanceProfile
+// and ConfigureCubeCOS shipped documented, tested and never called.
+func (r *Registry) Writers() []Backend {
+	out := make([]Backend, 0, len(r.writers))
+	for b := range r.writers {
+		out = append(out, b)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
 // writerFor returns the client for a backend, or a refusing default.
 //
 // The default is per backend and says what is missing, because "not

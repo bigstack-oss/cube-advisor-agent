@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -15,7 +14,6 @@ import (
 	"github.com/bigstack-oss/cube-advisor-agent/internal/agent"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/console"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
-	"github.com/bigstack-oss/cube-advisor-agent/internal/openstack"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnel"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
@@ -91,54 +89,24 @@ func runCmd(args []string) int {
 		}
 		opts = append(opts, toolplane.WithProbes(probeRunner))
 	}
-	// The cluster's own action level (ADR 0011), read once here so a malformed
-	// value is one loud line at startup rather than a mystery repeated per
-	// call. A missing or empty file is not an error and means observe; a word
-	// that is not a level is an error, and the agent still starts — at observe,
-	// serving reads — because refusing to run would take diagnosis away from
-	// the operator at exactly the moment they need it.
-	level, err := toolplane.ReadLevel(*dir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "run: %v; serving %s until it is corrected\n", err, level)
-	}
-	opts = append(opts, toolplane.WithLevel(level))
-
-	reg, err := toolplane.New(toolplane.Allowlist, auditor, opts...)
+	// Every per-cluster setting the operator configured, through the one path
+	// that reads them (ADR 0016). A setting absent from that list does not
+	// exist, which is what stops the next one shipping unwired.
+	reg, states, err := configure(*dir, toolplane.Allowlist, auditor, opts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return exitFailed
 	}
-
-	// The OpenStack credential, if the operator has written one. Absent is the
-	// ordinary state and not an error: an agent with no credential serves
-	// every read it always did and refuses a create with a message naming the
-	// missing configuration — which is a different refusal from the action
-	// level's, and says so.
-	//
-	// Wired only when present, so opting in is writing a file, and nothing
-	// about an existing deployment changes until someone does.
-	switch cred, err := openstack.ReadCredential(*dir); {
-	case errors.Is(err, openstack.ErrNoCredential):
-		// Said once, at startup, because "why did it refuse" is a question
-		// better answered before it is asked.
-		fmt.Fprintf(os.Stderr, "run: no OpenStack credential; creates will refuse until one is configured\n")
-	case err != nil:
-		// Loud, and still starts: a malformed credential must not take
-		// diagnosis away from the operator at the moment they need it, which
-		// is the same argument the action level makes.
-		fmt.Fprintf(os.Stderr, "run: %v; creates will refuse until it is corrected\n", err)
-	default:
-		compute, cerr := openstack.NewCompute(cred)
-		if cerr != nil {
-			fmt.Fprintf(os.Stderr, "run: %v; creates will refuse until it is corrected\n", cerr)
-			break
-		}
-		reg.ConfigureWriter(toolplane.BackendOpenStackCompute, compute)
-		fmt.Fprintf(os.Stderr, "run: OpenStack credential loaded for project %s\n", cred.Project)
+	// One line per setting, whatever happened to it. A broken setting disables
+	// what it enables and never more: the agent starts anyway, because
+	// refusing to run would take diagnosis away from the operator at exactly
+	// the moment they need it.
+	for _, st := range states {
+		fmt.Fprintf(os.Stderr, "run: %s\n", st.line)
 	}
 	// Stated at startup, because "what may this assistant do here" is the
 	// question an operator asks of a log and should not have to infer.
-	fmt.Fprintf(os.Stderr, "run: action level %s; serving %d tool(s)\n", level, len(reg.Names()))
+	fmt.Fprintf(os.Stderr, "run: action level %s; serving %d tool(s)\n", reg.Level(), len(reg.Names()))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
