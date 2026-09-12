@@ -38,6 +38,16 @@ type Entry struct {
 	// comparison that ignored the distinction would demand the two lists
 	// match when they legitimately do not.
 	Probe bool
+	// Unlisted reports whether this entry is one the SaaS calls on its own
+	// account rather than offering to the model — describing the instance
+	// profile for an approval prompt, for instance.
+	//
+	// Published for the same reason Probe is. A SaaS comparing its tool list
+	// against this catalogue has to know which absences are deliberate, and
+	// the alternative is a list of exceptions typed out over there: a
+	// hand-kept copy of a fact this side already knows, which is the shape of
+	// failure this package exists to remove.
+	Unlisted bool
 
 	// Reads is the sorted set of catalogue keys this entry accepts, empty for
 	// a tool that is not a catalogue read.
@@ -59,7 +69,10 @@ type Entry struct {
 func Entries() []Entry {
 	out := make([]Entry, 0, len(toolplane.Allowlist)+len(toolplane.ProbeControls))
 	for _, t := range toolplane.Allowlist {
-		out = append(out, Entry{Name: t.Name, Impact: t.Impact.String(), Reads: readsOf(t)})
+		out = append(out, Entry{
+			Name: t.Name, Impact: t.Impact.String(),
+			Unlisted: t.Unlisted, Reads: readsOf(t),
+		})
 	}
 	for _, t := range toolplane.ProbeControls {
 		out = append(out, Entry{Name: t.Name, Impact: t.Impact.String(), Probe: true})

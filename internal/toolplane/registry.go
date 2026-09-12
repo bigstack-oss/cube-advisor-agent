@@ -448,13 +448,20 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 	return out, runErr
 }
 
-// callControl dispatches a probe-plane control call.
+// callControl dispatches a control call — one this process answers from its
+// own state rather than by running a command or calling an API.
 //
-// Both operations are short by construction — starting a probe returns once
-// the goroutine is launched, polling one reads a map — so neither needs the
-// timeout ladder stretched to fit the measurement it controls. Results go back
-// as JSON so the SaaS forwards numbers rather than prose.
+// Every operation is short by construction: starting a probe returns once the
+// goroutine is launched, polling one reads a map, describing the profile reads
+// a struct. None needs the timeout ladder stretched to fit what it reports on.
+// Results go back as JSON so the SaaS forwards values rather than prose.
 func (r *Registry) callControl(ctx context.Context, tool Tool, args map[string]string) ([]byte, error) {
+	// The profile description is answered before the probe runner is
+	// considered, because it needs none: an agent with no probe plane still
+	// has to be able to say what a create would make.
+	if tool.Control == ControlInstanceProfile {
+		return r.callDescribeProfile(tool, args)
+	}
 	if r.probes == nil {
 		// Unreachable: the scratch class is refused at registration without a
 		// runner. Kept so a future control tool that is not scratch-class
@@ -507,6 +514,45 @@ func (r *Registry) callControl(ctx context.Context, tool Tool, args map[string]s
 		return out, nil
 	}
 	return nil, fmt.Errorf("%w: %q", ErrUnknownTool, tool.Name)
+}
+
+// callDescribeProfile reports what a create would make.
+//
+// It takes no arguments at all, and says so rather than ignoring them: a caller
+// passing one has misunderstood what this answers, and silence would let that
+// misunderstanding reach an approval prompt.
+//
+// An unconfigured agent reports Configured false rather than failing. The
+// caller is composing a sentence for a person, and "this cluster has not been
+// told what to create" is something worth saying — a failure here would leave
+// it with nothing and no reason.
+func (r *Registry) callDescribeProfile(tool Tool, args map[string]string) ([]byte, error) {
+	for k := range args {
+		r.audit.RecordToolCall(ToolCall{
+			Tool: tool.Name, Args: args, Allowed: false,
+			Reason: fmt.Sprintf("unexpected argument %q", k), At: time.Now().UTC(),
+		})
+		return nil, fmt.Errorf("%w: unexpected argument %q", ErrBadArgument, k)
+	}
+	p := r.profile
+	out, err := json.Marshal(tunnelproto.InstanceProfile{
+		// A profile is usable only with all three; a half-configured one
+		// refuses creates, and reporting it as configured would put values in
+		// an approval prompt for a call that cannot run.
+		Configured: p.Flavor != "" && p.Image != "" && p.Network != "",
+		Flavor:     p.Flavor,
+		Image:      p.Image,
+		Network:    p.Network,
+		Project:    p.Project,
+	})
+	if err != nil {
+		return nil, err
+	}
+	r.audit.RecordToolCall(ToolCall{
+		Tool: tool.Name, Args: args, Allowed: true,
+		At: time.Now().UTC(), Bytes: len(out),
+	})
+	return out, nil
 }
 
 // callGet resolves a Get tool's path and fetches it from cube-cos-api.

@@ -38,6 +38,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
 )
 
 // Impact is what a tool does to the cluster it runs against. It mirrors the
@@ -208,8 +210,10 @@ func (b Backend) String() string {
 	return fmt.Sprintf("backend(%d)", int(b))
 }
 
-// ControlOp identifies a built-in probe-plane operation. Like Impact it starts
-// at 1, so a tool that sets nothing is not accidentally a control tool.
+// ControlOp identifies a built-in operation — one this process answers from
+// its own state rather than by running a command or calling an API. Like
+// Impact it starts at 1, so a tool that sets nothing is not accidentally a
+// control tool.
 type ControlOp int
 
 const (
@@ -217,6 +221,9 @@ const (
 	ControlProbeStart ControlOp = iota + 1
 	// ControlProbeStatus reports a run's state and, when finished, its metrics.
 	ControlProbeStatus
+	// ControlInstanceProfile reports what a create would make, for the
+	// sentence a person approves.
+	ControlInstanceProfile
 )
 
 func (c ControlOp) String() string {
@@ -225,6 +232,8 @@ func (c ControlOp) String() string {
 		return "probe_start"
 	case ControlProbeStatus:
 		return "probe_status"
+	case ControlInstanceProfile:
+		return "describe_instance_profile"
 	}
 	return fmt.Sprintf("control(%d)", int(c))
 }
@@ -236,6 +245,18 @@ type Tool struct {
 
 	// Description is for the operator reading the allowlist, not the model.
 	Description string
+
+	// Unlisted marks a tool the SaaS calls on its own account and never
+	// offers to the model.
+	//
+	// It is not a security boundary — the executor serves the name to whoever
+	// holds the tunnel, listed or not, and the level and impact checks are
+	// what decide whether a call runs. It is an honesty flag for the
+	// catalogue: without it, a SaaS that compares its model-facing tool list
+	// against this allowlist must either advertise a tool the model has no
+	// use for, or carry an exception typed out on that side — which is the
+	// hand-kept copy toolcatalog exists to abolish.
+	Unlisted bool
 
 	// Argv is the exact command to run. Elements equal to a parameter
 	// placeholder (see Params) are replaced; everything else is literal.
@@ -599,6 +620,23 @@ var Allowlist = []Tool{
 		// boots afterwards. This bounds the acceptance, not the boot.
 		Timeout: 60 * time.Second,
 	},
+	// The create above takes its flavour, image and network from a file on
+	// this node, and until now the SaaS had no way to learn them. So the
+	// sentence a person approved said the values were "the cluster's own
+	// settings" — true, and not something anyone can consent to. This reports
+	// them, so the sentence can name what will exist.
+	//
+	// Read class: it discloses configuration this node's own operator wrote,
+	// creates nothing and changes nothing. Unlisted, because the model cannot
+	// choose these values and has no use for them; the SaaS calls it while
+	// composing an approval prompt.
+	{
+		Name:        tunnelproto.DescribeInstanceProfile,
+		Description: "Report the flavour, image and network a create would use, for the approval prompt.",
+		Control:     ControlInstanceProfile,
+		Impact:      ImpactRead,
+		Unlisted:    true,
+	},
 }
 
 // ProbeControls is the probe plane's half of the allowlist, kept separate
@@ -785,14 +823,17 @@ func (t Tool) validateControl() error {
 	if len(t.Params) > 0 {
 		return fmt.Errorf("tool %q is a control tool and must declare no parameters; its argument is checked by the probe runner, not substituted", t.Name)
 	}
-	if t.Control != ControlProbeStart && t.Control != ControlProbeStatus {
+	switch t.Control {
+	case ControlProbeStart, ControlProbeStatus, ControlInstanceProfile:
+	default:
 		return fmt.Errorf("tool %q declares an unknown control operation", t.Name)
 	}
-	// The probe plane creates and destroys its own scratch resources and
-	// changes no configuration; a control tool claiming a configuring class is
-	// claiming to be something the probe runner cannot do.
+	// A control tool answers from this process's own state — a probe run it
+	// started, a setting its operator wrote. None of that reaches a cluster's
+	// configuration, so a control tool claiming a configuring class is
+	// claiming to be something no control op can do.
 	if t.Impact != ImpactRead && t.Impact != ImpactScratch {
-		return fmt.Errorf("tool %q is a probe-plane control but declares impact %s; the probe plane changes no configuration", t.Name, t.Impact)
+		return fmt.Errorf("tool %q is a control tool but declares impact %s; a control operation changes no configuration", t.Name, t.Impact)
 	}
 	return nil
 }

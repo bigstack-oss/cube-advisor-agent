@@ -133,3 +133,32 @@ func ReadToolResult(r io.Reader) (ToolResult, error) {
 // MaxToolOutputBytes bounds a result frame. Generous next to `cluster check`
 // output, small next to memory exhaustion from a hostile or broken peer.
 const MaxToolOutputBytes = 1 << 20
+
+// DescribeInstanceProfile is the tool the SaaS calls to learn what a create
+// would make, so the sentence a person approves can name it.
+//
+// It is not offered to the model. The model already cannot choose a flavour or
+// an image — that is what the profile is for — so advertising a tool that
+// reports them would widen what the model sees without widening what it can do.
+const DescribeInstanceProfile = "describe_instance_profile"
+
+// InstanceProfile is what a cluster creates, as the SaaS needs to state it.
+//
+// It crosses the tool channel as that tool's result. Defined here because both
+// repositories read it: the executor renders it from the file its operator
+// wrote, the SaaS renders a sentence from it. A shape only one side could
+// import gets restated on the other, which is how two definitions of one
+// protocol come to disagree — cube-ai-advisor#121 and cube-advisor-agent#24
+// were both green while doing exactly that.
+//
+// Configured separates "this cluster has no profile" from "its fields are
+// empty". Those are different things to tell a person: the first is an operator
+// who has not opted in, the second would be a bug. A caller reading only the
+// fields could not tell them apart.
+type InstanceProfile struct {
+	Configured bool   `json:"configured"`
+	Flavor     string `json:"flavor,omitempty"`
+	Image      string `json:"image,omitempty"`
+	Network    string `json:"network,omitempty"`
+	Project    string `json:"project,omitempty"`
+}

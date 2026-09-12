@@ -29,6 +29,14 @@ func TestEveryAllowlistEntryIsPublished(t *testing.T) {
 		if e.Probe {
 			t.Errorf("%s is not a probe control but is published as one", tool.Name)
 		}
+		// Whether a tool is offered to the model is the SaaS's only reason to
+		// tolerate an absence from its own list, so a mismatch here would
+		// leave that side unable to tell a deliberate omission from a stale
+		// copy — which is the whole failure this package removes.
+		if e.Unlisted != tool.Unlisted {
+			t.Errorf("%s: catalogue says unlisted=%v, allowlist says %v",
+				tool.Name, e.Unlisted, tool.Unlisted)
+		}
 	}
 	for _, tool := range toolplane.ProbeControls {
 		if e := got[tool.Name]; !e.Probe {
