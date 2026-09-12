@@ -56,15 +56,23 @@ const (
 	projectPlaceholder = "{project}"
 )
 
-// executorFilled is the set above, as a lookup. A placeholder in it must not
-// appear in Params or Free: declaring it as a caller argument is how it would
-// stop being executor context.
-var executorFilled = map[string]bool{
-	dcPlaceholder:      true,
-	flavorPlaceholder:  true,
-	imagePlaceholder:   true,
-	networkPlaceholder: true,
-	projectPlaceholder: true,
+// executorFilled is the set above, as a lookup from placeholder to the
+// operator file that supplies it. A placeholder in it must not appear in
+// Params or Free: declaring it as a caller argument is how it would stop being
+// executor context.
+//
+// The file name is carried so an unconfigured create can say which file to
+// write. "This agent has no flavor configured" is true and leaves an operator
+// hunting; naming the file is the difference between a message they can read
+// and one they can act on. An empty value means no file supplies it yet —
+// {dc} until cube-cos-api access becomes a setting — and the refusal falls
+// back to the shorter wording rather than inventing a path.
+var executorFilled = map[string]string{
+	dcPlaceholder:      "",
+	flavorPlaceholder:  ProfileFileName,
+	imagePlaceholder:   ProfileFileName,
+	networkPlaceholder: ProfileFileName,
+	projectPlaceholder: ProfileFileName,
 }
 
 // InstanceProfile is the cluster's answer to "created how?" — everything about
@@ -207,7 +215,7 @@ func idempotencyKey(tool, path string, body map[string]string) string {
 // like it chose something it did not.
 func (t Tool) resolveWrite(args map[string]string, ctxValues map[string]string) (string, map[string]string, error) {
 	for k := range args {
-		if executorFilled[k] {
+		if _, filled := executorFilled[k]; filled {
 			return "", nil, fmt.Errorf("argument %s is executor context, not a caller argument", k)
 		}
 		_, enumerated := t.Params[k]
@@ -221,9 +229,13 @@ func (t Tool) resolveWrite(args map[string]string, ctxValues map[string]string) 
 		if !isPlaceholder(tok) {
 			return tok, nil
 		}
-		if executorFilled[tok] {
+		if file, filled := executorFilled[tok]; filled {
 			v := ctxValues[tok]
 			if v == "" {
+				if file != "" {
+					return "", fmt.Errorf("this agent has no %s configured in %s; it cannot create anything until its operator sets one",
+						strings.Trim(tok, "{}"), file)
+				}
 				return "", fmt.Errorf("this agent has no %s configured; it cannot create anything until its operator sets one", strings.Trim(tok, "{}"))
 			}
 			return v, nil

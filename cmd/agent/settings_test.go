@@ -59,6 +59,18 @@ func effects(t *testing.T) []effect {
 			observe: func(r *toolplane.Registry) string { return r.Level().String() },
 		},
 		{
+			name:    "instance profile",
+			file:    toolplane.ProfileFileName,
+			content: `{"flavor":"m1.large","image":"ubuntu-24.04","network":"tenant-net"}` + "\n",
+			// The action level's rule, not the credential's: no secret, but
+			// whoever may write it chooses the image.
+			mode: 0o644,
+			observe: func(r *toolplane.Registry) string {
+				p := r.Profile()
+				return strings.Join([]string{p.Flavor, p.Image, p.Network}, "/")
+			},
+		},
+		{
 			name:    "OpenStack credential",
 			file:    openstack.CredentialFileName,
 			content: string(cred),
@@ -167,6 +179,41 @@ func TestABrokenSettingIsMarkedAndStillConfigures(t *testing.T) {
 	}
 }
 
+// A profile naming two of three fields is broken rather than unset, and is not
+// applied: a half-configured profile creates nothing rather than something
+// half-chosen. The agent still configures and still serves its reads.
+func TestAHalfConfiguredProfileIsBrokenAndNotApplied(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, toolplane.ProfileFileName)
+	if err := os.WriteFile(path, []byte(`{"flavor":"m1.large","image":"ubuntu-24.04"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, states, err := configure(dir, toolplane.Allowlist, discardAuditor())
+	if err != nil {
+		t.Fatalf("configure refused to build a registry over a half-configured profile: %v", err)
+	}
+	if got := reg.Profile(); got.Flavor != "" || got.Image != "" {
+		t.Errorf("Profile() = %+v over a half-configured file, want nothing applied", got)
+	}
+
+	var broken []string
+	for _, st := range states {
+		if st.broken {
+			broken = append(broken, st.line)
+		}
+	}
+	if len(broken) != 1 {
+		t.Fatalf("broken settings = %d, want exactly the profile: %v", len(broken), broken)
+	}
+	if !strings.Contains(broken[0], "network") {
+		t.Errorf("the line should name the missing field, not the file in general: %q", broken[0])
+	}
+}
+
 // Nothing configured is the ordinary state of a cluster that has not opted in:
 // every setting still reports, and the agent serves reads.
 func TestAnUnconfiguredDirectoryReportsEverySettingAndServesReads(t *testing.T) {
@@ -207,8 +254,8 @@ func writeSetting(t *testing.T, dir string, e effect) {
 	if err := os.WriteFile(filepath.Join(dir, e.file), []byte(e.content), e.mode); err != nil {
 		t.Fatal(err)
 	}
-	// WriteFile's mode is masked by the process umask, and both settings check
-	// their own mode. Set it explicitly so the test does not depend on one.
+	// WriteFile's mode is masked by the process umask, and every setting checks
+	// its own mode. Set it explicitly so the test does not depend on one.
 	if err := os.Chmod(filepath.Join(dir, e.file), e.mode); err != nil {
 		t.Fatal(err)
 	}

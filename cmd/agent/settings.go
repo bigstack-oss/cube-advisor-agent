@@ -44,7 +44,7 @@ type settingState struct {
 
 // settings is every per-cluster setting this agent reads. Adding one is adding
 // an entry here, and there is no second place to forget.
-var settings = []setting{actionLevel, openStackCredential}
+var settings = []setting{actionLevel, instanceProfile, openStackCredential}
 
 // actionLevel is the cluster's own action level (ADR 0011).
 //
@@ -66,6 +66,37 @@ var actionLevel = setting{
 		}
 		st.line = fmt.Sprintf("action level: %s", level)
 		return st
+	},
+}
+
+// instanceProfile is what this cluster creates: flavour, image and network
+// (ADR 0016, slice 3).
+//
+// Absent is the ordinary state and not an error — a cluster that has not opted
+// in creates nothing, and says which file would change that. A file the
+// operator wrote and this agent cannot honour is broken and not applied, so a
+// half-configured profile creates nothing rather than something half-chosen:
+// the empty field would otherwise reach the resolver, which refuses anyway,
+// but one loud line at startup beats the same refusal discovered per call.
+var instanceProfile = setting{
+	name: "instance profile",
+	file: toolplane.ProfileFileName,
+	load: func(dir string) settingState {
+		profile, err := toolplane.ReadInstanceProfile(dir)
+		switch {
+		case errors.Is(err, toolplane.ErrNoProfile):
+			return settingState{line: "instance profile: not configured; creates will refuse until one is"}
+		case err != nil:
+			return settingState{
+				broken: true,
+				line:   fmt.Sprintf("instance profile: %v; creates will refuse until it is corrected", err),
+			}
+		}
+		return settingState{
+			line: fmt.Sprintf("instance profile: flavor %s, image %s, network %s",
+				profile.Flavor, profile.Image, profile.Network),
+			apply: func(r *toolplane.Registry) { r.ConfigureInstanceProfile(profile) },
+		}
 	},
 }
 

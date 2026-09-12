@@ -808,19 +808,19 @@ func (t Tool) validateGet() error {
 	if _, declared := t.Params[dcPlaceholder]; declared {
 		return fmt.Errorf("tool %q declares %s; it is executor context, not a parameter", t.Name, dcPlaceholder)
 	}
-	return t.checkPlaceholders(pathSegments(t.Get), map[string]bool{dcPlaceholder: true})
+	return t.checkPlaceholders(pathSegments(t.Get), map[string]string{dcPlaceholder: ""})
 }
 
 // checkPlaceholders enforces that every placeholder in tokens is either an
 // exempt executor slot or a declared model parameter, and that every declared
 // parameter is used with a finite value set.
-func (t Tool) checkPlaceholders(tokens []string, exempt map[string]bool) error {
+func (t Tool) checkPlaceholders(tokens []string, exempt map[string]string) error {
 	seen := map[string]bool{}
 	for _, tok := range tokens {
 		if !isPlaceholder(tok) {
 			continue
 		}
-		if exempt[tok] {
+		if _, ok := exempt[tok]; ok {
 			continue
 		}
 		_, enumerated := t.Params[tok]

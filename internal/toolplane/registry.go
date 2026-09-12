@@ -216,6 +216,16 @@ func (r *Registry) Level() Level { return r.level }
 // instance gets a clean refusal rather than a surprising default.
 func (r *Registry) ConfigureInstanceProfile(p InstanceProfile) { r.profile = p }
 
+// Profile reports what this agent creates, ConfigureInstanceProfile's
+// observable counterpart.
+//
+// It exists for the same reason Writers does: without it, a profile on disk
+// reaching this registry is visible only by attempting a create against a real
+// cloud, so nothing could assert the wiring without a network — which is how
+// ConfigureInstanceProfile shipped documented, tested and never called. It
+// holds no secret; the credential beside it does, and that one is not exposed.
+func (r *Registry) Profile() InstanceProfile { return r.profile }
+
 // ConfigureWriter wires the authenticated write client for one backend.
 // Separate from ConfigureCubeCOS so an agent can read the management API
 // without being able to write anywhere: an operator who wires only the reader
