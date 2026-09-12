@@ -105,8 +105,10 @@ func runCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "run: %s\n", st.line)
 	}
 	// Stated at startup, because "what may this assistant do here" is the
-	// question an operator asks of a log and should not have to infer.
-	fmt.Fprintf(os.Stderr, "run: action level %s; serving %d tool(s)\n", reg.Level(), len(reg.Names()))
+	// question an operator asks of a log and should not have to infer. The
+	// same line `config check` ends with, formatted in one place so a check
+	// and the run it predicts cannot describe one registry differently.
+	fmt.Fprintf(os.Stderr, "run: %s\n", summaryLine(reg))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

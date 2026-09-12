@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -279,10 +278,7 @@ func writeSetting(t *testing.T, dir string, e effect) {
 	}
 }
 
-func discardAuditor() toolplane.Auditor {
-	return toolplane.NewWriterAuditor(nopWriteCloser{io.Discard})
-}
-
-type nopWriteCloser struct{ io.Writer }
-
-func (nopWriteCloser) Close() error { return nil }
+// discardAuditor is checkAuditor, the one `config check` builds registries
+// with: these tests and that command both want a registry and no audit log, so
+// they should not disagree about how to get one.
+func discardAuditor() toolplane.Auditor { return checkAuditor() }

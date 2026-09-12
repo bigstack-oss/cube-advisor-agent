@@ -45,23 +45,35 @@ const (
 )
 
 func main() {
-	if len(os.Args) < 2 {
+	os.Exit(dispatch(os.Args[1:]))
+}
+
+// dispatch routes one subcommand and returns its exit code.
+//
+// Separate from main so a test can reach a subcommand the way an operator
+// does — through this switch — rather than by calling its function directly.
+// A subcommand whose routing nothing asserts is a subcommand that can be
+// removed from here and still pass its own tests.
+func dispatch(args []string) int {
+	if len(args) < 1 {
 		usage()
-		os.Exit(exitUsage)
+		return exitUsage
 	}
-	switch os.Args[1] {
+	switch args[0] {
 	case "enroll":
-		os.Exit(enrollCmd(os.Args[2:]))
+		return enrollCmd(args[1:])
 	case "run":
-		os.Exit(runCmd(os.Args[2:]))
+		return runCmd(args[1:])
+	case "config":
+		return configCmd(args[1:])
 	case "status":
-		os.Exit(statusCmd(os.Args[2:]))
+		return statusCmd(args[1:])
 	case "version", "-version", "--version":
 		fmt.Printf("cube-advisor-agent %s (%s)\n", version, commit)
-		os.Exit(exitOK)
+		return exitOK
 	default:
 		usage()
-		os.Exit(exitUsage)
+		return exitUsage
 	}
 }
 
@@ -70,6 +82,7 @@ func usage() {
 
   enroll  -server <url> [-token <t> | -token-file <path> | -token-stdin] [-tunnel <host:port>]
   run     [-server <host:port>] [-dir <path>] [-audit <path>]
+  config  check [-dir <path>] [-probes]
   status
   version
 `, version)
