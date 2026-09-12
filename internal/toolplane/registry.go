@@ -38,6 +38,16 @@ var ErrToolTimedOut = errors.New("toolplane: tool exceeded its time limit")
 // to try again at a cluster that will refuse it every time.
 var ErrRefusedAtLevel = errors.New("toolplane: refused at this cluster's action level")
 
+// ErrRefusedWithoutApproval is a call this cluster's consent setting required a
+// person to agree to, where the caller reported none.
+//
+// Its own error rather than ErrRefusedAtLevel because the two are different
+// conditions with different fixes: a level refusal is answered by an operator
+// raising a level, this one by a person approving the call — or by a SaaS whose
+// mirror has caught up. The wire collapses both into the generic refusal, but
+// the local audit log keeps them apart, and that log is the customer's.
+var ErrRefusedWithoutApproval = errors.New("toolplane: refused: this cluster requires a person to approve this call")
+
 // ErrOutputTruncated is how a runner reports that a command emitted more than
 // the cap. Call converts it into a successful, marked result rather than a
 // failure: the first half-megabyte of a log is evidence, silence is not.
@@ -81,6 +91,13 @@ type Registry struct {
 	// mirror to shape what it offers the model, and where the two disagree
 	// this one refuses.
 	level Level
+
+	// consent is how much this cluster asks a person before acting
+	// (ADR 0011, amended), read from a file on this node at construction.
+	// Authoritative in the same way level is, and enforced differently: the
+	// SaaS does the asking, and this side refuses a call it was not told a
+	// person agreed to. See refusedWithoutAPerson.
+	consent Consent
 
 	// datacenter is the agent's own cluster identity, filled into a Get tool's
 	// {dc}. Empty until deployment wires it, which is why an unconfigured Get
@@ -139,7 +156,11 @@ func New(tools []Tool, audit Auditor, opts ...Option) (*Registry, error) {
 		// Fail closed before any option runs: a registry built without
 		// WithLevel serves reads, which is ADR 0011's "unset means observe"
 		// at the one place a caller could forget to say it.
-		level:   DefaultLevel,
+		level: DefaultLevel,
+		// Fail closed for the same reason and at the same place: a registry
+		// built without WithConsent asks for everything, which is ADR 0011's
+		// "unset means always".
+		consent: DefaultConsent,
 		writers: map[Backend]Poster{},
 		writes:  newWriteLedger(),
 	}
@@ -209,6 +230,46 @@ func (r *Registry) refusedByLevel(i Impact) bool {
 // SaaS never asks, because asking would make the answer something a compromised
 // SaaS could be told.
 func (r *Registry) Level() Level { return r.level }
+
+// WithConsent sets how much this cluster asks a person before acting
+// (ADR 0011, amended). A registry given no setting asks for everything.
+func WithConsent(c Consent) Option {
+	return func(r *Registry) { r.consent = c }
+}
+
+// Consent reports what this agent requires. ConfigureInstanceProfile's
+// counterpart for the dial: a setting that reached the registry is otherwise
+// only observable by making a call and watching it be refused, and a setting
+// nothing can observe is how two of these shipped documented, tested and
+// unwired.
+func (r *Registry) Consent() Consent { return r.consent }
+
+// refusedWithoutAPerson reports whether this cluster required a person to agree
+// and was not told one did.
+//
+// The executor's half of the consent dial, and the reason the dial is
+// cluster-owned at all. The SaaS decides whether to *ask*; only it can put a
+// question to a human. But a SaaS with a stale mirror, a bug, or an operator
+// who changed the file a minute ago would otherwise skip the question silently,
+// and the cluster would never know. Here it does: the call is refused, which is
+// visible, instead of running unattended, which is not.
+//
+// What this does not defend against, plainly: a SaaS that lies. approved
+// arrives over the tunnel, so a compromised SaaS can set it on a call nobody
+// saw. The action level is the control that survives that, because the executor
+// answers it from its own state and believes nothing. This one catches the
+// realistic failure rather than the adversarial one — and the claim is audited,
+// so a customer reading their log sees an approval asserted for a call their
+// own approval record has never heard of.
+//
+// Reads are never refused here: Asks answers false for them whatever the
+// setting, so a cluster at ConsentAlways still serves its catalogue.
+func (r *Registry) refusedWithoutAPerson(t Tool, approved bool) bool {
+	if approved {
+		return false
+	}
+	return r.consent.Asks(t.Impact, t.Destructive)
+}
 
 // ConfigureInstanceProfile sets everything about a created instance except its
 // name. Called once at startup from deployment configuration; until then a
@@ -361,10 +422,15 @@ func (r *Registry) Names() []string {
 
 // Call runs a tool by name with the given arguments.
 //
+// approved is the SaaS's claim that a person agreed to this call. It is a claim
+// and audited as one: this side cannot see the human, so it records what it was
+// told alongside what it required. See refusedWithoutAPerson for what that
+// catches and what it does not.
+//
 // Every outcome is audited before it is returned, including refusals: a refused
 // call is precisely what a customer reviewing vendor access wants to see, and
 // dropping it silently would hide the interesting half of the log.
-func (r *Registry) Call(ctx context.Context, name string, args map[string]string) ([]byte, error) {
+func (r *Registry) Call(ctx context.Context, name string, args map[string]string, approved bool) ([]byte, error) {
 	tool, ok := r.tools[name]
 	if !ok {
 		r.audit.RecordToolCall(ToolCall{
@@ -389,6 +455,26 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 			At:     time.Now().UTC(),
 		})
 		return nil, fmt.Errorf("%w: %s", ErrRefusedAtLevel, tunnelproto.RefusedAtLevelReason)
+	}
+
+	// Then whether a person agreed, which is a question about this call rather
+	// than about the cluster — so it comes second, after the class question,
+	// and before the tool touches anything.
+	//
+	// The refusal is the generic one. Unlike the level, this reason would be
+	// an oracle: "a person did not approve this" tells a caller that the name
+	// resolved, that its class is one this cluster gates, and that the only
+	// thing missing was the human — three facts about the allowlist from one
+	// error string. The cause goes to the local audit log, where the customer
+	// reads it and the SaaS does not.
+	if r.refusedWithoutAPerson(tool, approved) {
+		r.audit.RecordToolCall(ToolCall{
+			Tool: name, Args: args, Allowed: false,
+			Reason: fmt.Sprintf("consent %s requires a person to approve impact %s and the caller did not report one",
+				r.consent, tool.Impact),
+			At: time.Now().UTC(),
+		})
+		return nil, fmt.Errorf("%w: %s", ErrRefusedWithoutApproval, tunnelproto.RefusedReason)
 	}
 
 	if tool.Control != 0 {

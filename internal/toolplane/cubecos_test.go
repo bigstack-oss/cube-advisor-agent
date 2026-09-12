@@ -130,7 +130,7 @@ func TestAnUnconfiguredReadRefusesNamingTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = r.Call(context.Background(), "cube_cos_read", map[string]string{"resource": "healths"})
+	_, err = r.Call(context.Background(), "cube_cos_read", map[string]string{"resource": "healths"}, true)
 	if err == nil {
 		t.Fatal("a read succeeded with no cube-cos-api access configured")
 	}

@@ -184,7 +184,10 @@ func (s *Server) serveTool(ctx context.Context, ch *tunnel.Channel) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	out, err := s.Tools.Call(ctx, name, args)
+	// Approved comes from the open frame the protocol already validated, for
+	// the reason the tool name does: one source of truth per fact, and it is
+	// the one that was checked.
+	out, err := s.Tools.Call(ctx, name, args, ch.Open.Approved)
 	if err != nil {
 		// Refusals and failures are reported the same way on the wire. The
 		// distinction — and the reason — is in the local audit log, which the

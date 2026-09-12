@@ -26,7 +26,7 @@ func catalogTool() Tool {
 func TestACatalogueKeySelectsItsPathAndTheAgentFillsTheDatacenter(t *testing.T) {
 	r, _, fake := newGetRegistry(t, []Tool{catalogTool()}, "sky-dc")
 
-	out, err := r.Call(context.Background(), "cube_cos_read", map[string]string{"resource": "nodes"})
+	out, err := r.Call(context.Background(), "cube_cos_read", map[string]string{"resource": "nodes"}, true)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestACatalogueKeySelectsItsPathAndTheAgentFillsTheDatacenter(t *testing.T) 
 func TestAKeyOutsideTheCatalogueIsRefused(t *testing.T) {
 	r, rec, fake := newGetRegistry(t, []Tool{catalogTool()}, "sky-dc")
 
-	_, err := r.Call(context.Background(), "cube_cos_read", map[string]string{"resource": "settings"})
+	_, err := r.Call(context.Background(), "cube_cos_read", map[string]string{"resource": "settings"}, true)
 	if !errors.Is(err, ErrBadArgument) {
 		t.Fatalf("err = %v, want a bad-argument refusal", err)
 	}
@@ -108,7 +108,7 @@ func TestACatalogueReadTakesNoOtherArgument(t *testing.T) {
 	_, err := r.Call(context.Background(), "cube_cos_read", map[string]string{
 		"resource": "nodes",
 		"watch":    "true",
-	})
+	}, true)
 	if !errors.Is(err, ErrBadArgument) {
 		t.Fatalf("err = %v, want a bad-argument refusal", err)
 	}
@@ -120,7 +120,7 @@ func TestACatalogueReadTakesNoOtherArgument(t *testing.T) {
 func TestACatalogueReadWithoutItsKeyIsRefused(t *testing.T) {
 	r, _, _ := newGetRegistry(t, []Tool{catalogTool()}, "sky-dc")
 
-	if _, err := r.Call(context.Background(), "cube_cos_read", nil); !errors.Is(err, ErrBadArgument) {
+	if _, err := r.Call(context.Background(), "cube_cos_read", nil, true); !errors.Is(err, ErrBadArgument) {
 		t.Fatalf("err = %v, want a bad-argument refusal", err)
 	}
 }
@@ -141,7 +141,7 @@ func TestACatalogueReadIsCappedAndSaysSo(t *testing.T) {
 		err:  fmt.Errorf("%w at 64 bytes", ErrOutputTruncated),
 	})
 
-	out, err := r.Call(context.Background(), "cube_cos_read", map[string]string{"resource": "healths"})
+	out, err := r.Call(context.Background(), "cube_cos_read", map[string]string{"resource": "healths"}, true)
 	if err != nil {
 		t.Fatalf("a truncated read must succeed, got %v", err)
 	}
@@ -160,7 +160,7 @@ func TestACatalogueReadWithoutADatacenterIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := r.Call(context.Background(), "cube_cos_read", map[string]string{"resource": "healths"}); err == nil {
+	if _, err := r.Call(context.Background(), "cube_cos_read", map[string]string{"resource": "healths"}, true); err == nil {
 		t.Fatal("a catalogue read succeeded with no datacenter configured")
 	}
 }

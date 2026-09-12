@@ -45,7 +45,7 @@ type settingState struct {
 
 // settings is every per-cluster setting this agent reads. Adding one is adding
 // an entry here, and there is no second place to forget.
-var settings = []setting{actionLevel, cubeCOSAccess, instanceProfile, openStackCredential}
+var settings = []setting{actionLevel, consentDial, cubeCOSAccess, instanceProfile, openStackCredential}
 
 // actionLevel is the cluster's own action level (ADR 0011).
 //
@@ -68,6 +68,50 @@ var actionLevel = setting{
 		st.line = fmt.Sprintf("action level: %s", level)
 		return st
 	},
+}
+
+// consentDial is how much this cluster asks a person before acting
+// (ADR 0011, amended).
+//
+// Read once at startup, like the level and for the same reason. Absent, empty
+// and whitespace mean always and are not errors; a word that is not a setting
+// is an error, and the setting is still applied because ReadConsent answers
+// always alongside it — asking too much beats refusing to start.
+//
+// The line says what the setting means as well as what it is, because one of
+// the three values currently means something an operator would not guess:
+// destructive asks only about tools that declare themselves so, and no tool in
+// this allowlist does. A cluster set to destructive acts unattended today. That
+// is a trap worth one clause at startup rather than a discovery later.
+var consentDial = setting{
+	name: "consent",
+	file: toolplane.ConsentFileName,
+	load: func(dir string) settingState {
+		c, err := toolplane.ReadConsent(dir)
+		st := settingState{opt: toolplane.WithConsent(c)}
+		if err != nil {
+			st.broken = true
+			st.line = fmt.Sprintf("consent: %v; asking for %s until it is corrected", err, c)
+			return st
+		}
+		st.line = fmt.Sprintf("consent: %s%s", c, consentCaveat(c))
+		return st
+	},
+}
+
+// consentCaveat names the gap between what a value promises and what this build
+// can deliver.
+//
+// Only destructive has one, and only while no tool declares itself destructive.
+// When one does this returns nothing and the line is just the value — which is
+// the point of computing it from the allowlist rather than writing the caveat
+// into the string: it disappears on its own when it stops being true, instead
+// of becoming the next comment that outlived its subject.
+func consentCaveat(c toolplane.Consent) string {
+	if c == toolplane.ConsentDestructive && !toolplane.DestructiveToolsExist() {
+		return " — but no tool in this build declares itself destructive, so nothing will be asked about"
+	}
+	return ""
 }
 
 // cubeCOSAccess is where this node's cube-cos-api is and what to call the

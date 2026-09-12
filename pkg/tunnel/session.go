@@ -157,8 +157,30 @@ func (c *Channel) Read(p []byte) (int, error) { return c.r.Read(p) }
 //
 // The request is validated before it is sent even though the peer validates on
 // receipt; a caller should never knowingly emit something the peer will reject.
-func (s *Session) OpenChannel(ctx context.Context, id uint32, kind tunnelproto.ChannelKind, target tunnelproto.Target) (net.Conn, error) {
+// OpenOption sets a field on a channel-open that most callers leave alone.
+//
+// Variadic rather than a parameter so the console and web callers — which have
+// no opinion about approval and never will — keep the signature they had, and
+// so the one call site that does have an opinion states it by name rather than
+// by a bare bool nobody can read at a glance.
+type OpenOption func(*tunnelproto.ChannelOpen)
+
+// ApprovedByPerson marks a tool channel as one a person agreed to (ADR 0011's
+// consent dial).
+//
+// The agent judges this against its own setting and refuses when its cluster
+// requires a person and this is absent. It is a claim rather than a proof — see
+// ChannelOpen.Approved — so it is set at exactly one place, from the gate's
+// answer, and never inferred.
+func ApprovedByPerson() OpenOption {
+	return func(o *tunnelproto.ChannelOpen) { o.Approved = true }
+}
+
+func (s *Session) OpenChannel(ctx context.Context, id uint32, kind tunnelproto.ChannelKind, target tunnelproto.Target, opts ...OpenOption) (net.Conn, error) {
 	open := tunnelproto.ChannelOpen{ID: id, Kind: kind, Target: target}
+	for _, o := range opts {
+		o(&open)
+	}
 	if err := open.Validate(); err != nil {
 		return nil, fmt.Errorf("tunnel: refusing to open an invalid channel: %w", err)
 	}

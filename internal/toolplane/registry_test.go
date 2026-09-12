@@ -76,7 +76,7 @@ func TestNoConfiguringToolIsServedAtTheDefaultLevel(t *testing.T) {
 		if got := r.Names(); len(got) != 0 {
 			t.Errorf("impact %s advertised at the default level: %v", impact, got)
 		}
-		if _, err := r.Call(context.Background(), "restart_thing", nil); !errors.Is(err, ErrRefusedAtLevel) {
+		if _, err := r.Call(context.Background(), "restart_thing", nil, true); !errors.Is(err, ErrRefusedAtLevel) {
 			t.Errorf("call of impact %s: err = %v, want ErrRefusedAtLevel", impact, err)
 		}
 	}
@@ -157,7 +157,7 @@ func TestMalformedToolsAreRefusedAtRegistration(t *testing.T) {
 
 func TestUnknownToolIsRefusedAndAudited(t *testing.T) {
 	r, rec, _ := newTestRegistry(t)
-	_, err := r.Call(context.Background(), "run_anything", nil)
+	_, err := r.Call(context.Background(), "run_anything", nil, true)
 	if !errors.Is(err, ErrUnknownTool) {
 		t.Fatalf("err = %v, want ErrUnknownTool", err)
 	}
@@ -184,7 +184,7 @@ func TestArgumentsOutsideThePermittedSetAreRefused(t *testing.T) {
 		"storage", // right group, wrong case: exact match means exact
 	}
 	for _, v := range hostile {
-		_, err := r.Call(context.Background(), "cluster_health", map[string]string{"{group}": v})
+		_, err := r.Call(context.Background(), "cluster_health", map[string]string{"{group}": v}, true)
 		if !errors.Is(err, ErrBadArgument) {
 			t.Errorf("value %q was not refused (err = %v)", v, err)
 		}
@@ -203,7 +203,7 @@ func TestArgumentsOutsideThePermittedSetAreRefused(t *testing.T) {
 
 func TestPermittedArgumentsResolveIntoAFixedArgv(t *testing.T) {
 	r, _, lastArgv := newTestRegistry(t)
-	if _, err := r.Call(context.Background(), "cluster_health", map[string]string{"{group}": "Storage"}); err != nil {
+	if _, err := r.Call(context.Background(), "cluster_health", map[string]string{"{group}": "Storage"}, true); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	want := []string{"hex_cli", "-c", "cluster", "-c", "health", "Storage"}
@@ -215,11 +215,11 @@ func TestPermittedArgumentsResolveIntoAFixedArgv(t *testing.T) {
 func TestUnexpectedAndMissingArgumentsAreRefused(t *testing.T) {
 	r, _, _ := newTestRegistry(t)
 	// An argument the tool never declared.
-	if _, err := r.Call(context.Background(), "cluster_check", map[string]string{"{group}": "Storage"}); !errors.Is(err, ErrBadArgument) {
+	if _, err := r.Call(context.Background(), "cluster_check", map[string]string{"{group}": "Storage"}, true); !errors.Is(err, ErrBadArgument) {
 		t.Errorf("undeclared argument accepted: %v", err)
 	}
 	// A declared argument left out.
-	if _, err := r.Call(context.Background(), "cluster_health", nil); !errors.Is(err, ErrBadArgument) {
+	if _, err := r.Call(context.Background(), "cluster_health", nil, true); !errors.Is(err, ErrBadArgument) {
 		t.Errorf("missing argument accepted: %v", err)
 	}
 }
@@ -229,10 +229,10 @@ func TestUnexpectedAndMissingArgumentsAreRefused(t *testing.T) {
 func TestEveryCallIsAudited(t *testing.T) {
 	r, rec, _ := newTestRegistry(t)
 	ctx := context.Background()
-	_, _ = r.Call(ctx, "cluster_check", nil)                                          // allowed
-	_, _ = r.Call(ctx, "cluster_health", map[string]string{"{group}": "nope"})        // refused: bad value
-	_, _ = r.Call(ctx, "nonexistent", nil)                                            // refused: unknown
-	_, _ = r.Call(ctx, "cluster_health", map[string]string{"{group}": "ClusterLink"}) // allowed
+	_, _ = r.Call(ctx, "cluster_check", nil, true)                                          // allowed
+	_, _ = r.Call(ctx, "cluster_health", map[string]string{"{group}": "nope"}, true)        // refused: bad value
+	_, _ = r.Call(ctx, "nonexistent", nil, true)                                            // refused: unknown
+	_, _ = r.Call(ctx, "cluster_health", map[string]string{"{group}": "ClusterLink"}, true) // allowed
 
 	if len(rec.calls) != 4 {
 		t.Fatalf("audited %d calls, want 4", len(rec.calls))
@@ -329,7 +329,7 @@ func TestPerToolTimeoutWinsOverTheDefault(t *testing.T) {
 	// cluster_check declares 100s; the deadline must reflect it, not the 60s
 	// default. Generous tolerance — this asserts which bound applied, not
 	// scheduler precision.
-	if _, err := r.Call(context.Background(), "cluster_check", nil); err != nil {
+	if _, err := r.Call(context.Background(), "cluster_check", nil, true); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	if got < 90*time.Second || got > 100*time.Second {
@@ -337,7 +337,7 @@ func TestPerToolTimeoutWinsOverTheDefault(t *testing.T) {
 	}
 
 	// cluster_health declares nothing; the registry default applies.
-	if _, err := r.Call(context.Background(), "cluster_health", map[string]string{"{group}": "Storage"}); err != nil {
+	if _, err := r.Call(context.Background(), "cluster_health", map[string]string{"{group}": "Storage"}, true); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	if got < 50*time.Second || got > 60*time.Second {
@@ -363,7 +363,7 @@ func TestATimedOutToolReturnsADistinguishableResult(t *testing.T) {
 		return nil, fmt.Errorf("signal: killed")
 	}
 
-	_, err = r.Call(context.Background(), "slow", nil)
+	_, err = r.Call(context.Background(), "slow", nil, true)
 	if !errors.Is(err, ErrToolTimedOut) {
 		t.Fatalf("err = %v, want ErrToolTimedOut", err)
 	}
@@ -383,7 +383,7 @@ func TestAnOrdinaryFailureIsNotMislabelledATimeout(t *testing.T) {
 	r.run = func(ctx context.Context, argv []string, maxBytes int) ([]byte, error) {
 		return nil, fmt.Errorf("exit status 1")
 	}
-	_, err := r.Call(context.Background(), "cluster_check", nil)
+	_, err := r.Call(context.Background(), "cluster_check", nil, true)
 	if errors.Is(err, ErrToolTimedOut) {
 		t.Fatalf("an ordinary failure was reported as a timeout: %v", err)
 	}

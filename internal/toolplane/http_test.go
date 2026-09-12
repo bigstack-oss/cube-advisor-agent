@@ -69,7 +69,7 @@ func newGetRegistry(t *testing.T, tools []Tool, dc string) (*Registry, *recorder
 
 func TestAGetToolFillsTheDatacenterFromTheAgentNotTheCaller(t *testing.T) {
 	r, _, fake := newGetRegistry(t, []Tool{healthsTool()}, "sky-dc")
-	out, err := r.Call(context.Background(), "cube_cos_healths", nil)
+	out, err := r.Call(context.Background(), "cube_cos_healths", nil, true)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestTheCallerCannotSupplyTheDatacenter(t *testing.T) {
 	// {dc} is the agent's identity, not a model parameter. Passing it is an
 	// unexpected argument, refused like any other.
 	r, _, _ := newGetRegistry(t, []Tool{healthsTool()}, "sky-dc")
-	_, err := r.Call(context.Background(), "cube_cos_healths", map[string]string{"dc": "other-dc"})
+	_, err := r.Call(context.Background(), "cube_cos_healths", map[string]string{"dc": "other-dc"}, true)
 	if err == nil {
 		t.Fatal("the caller supplied a datacenter and it was accepted")
 	}
@@ -93,13 +93,13 @@ func TestTheCallerCannotSupplyTheDatacenter(t *testing.T) {
 
 func TestAModelParameterIsEnumCheckedInThePath(t *testing.T) {
 	r, _, fake := newGetRegistry(t, []Tool{serviceHealthTool()}, "sky-dc")
-	if _, err := r.Call(context.Background(), "cube_cos_service_health", map[string]string{"{svc}": "Storage"}); err != nil {
+	if _, err := r.Call(context.Background(), "cube_cos_service_health", map[string]string{"{svc}": "Storage"}, true); err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
 	if fake.lastPath != "/api/v1/datacenters/sky-dc/healths/services/Storage" {
 		t.Errorf("path = %q", fake.lastPath)
 	}
-	if _, err := r.Call(context.Background(), "cube_cos_service_health", map[string]string{"{svc}": "Secrets"}); err == nil {
+	if _, err := r.Call(context.Background(), "cube_cos_service_health", map[string]string{"{svc}": "Secrets"}, true); err == nil {
 		t.Error("a value outside the enum reached the path")
 	}
 }
@@ -113,14 +113,14 @@ func TestAPathValueCannotTraverse(t *testing.T) {
 		Params: map[string][]string{"{node}": {"../../secrets", "ok"}}, Impact: ImpactRead,
 	}
 	r, _, _ := newGetRegistry(t, []Tool{tool}, "sky-dc")
-	if _, err := r.Call(context.Background(), "probe", map[string]string{"{node}": "../../secrets"}); err == nil {
+	if _, err := r.Call(context.Background(), "probe", map[string]string{"{node}": "../../secrets"}, true); err == nil {
 		t.Error("a traversing path value was accepted")
 	}
 }
 
 func TestAGetToolIsAuditedByPathNeverByToken(t *testing.T) {
 	r, rec, _ := newGetRegistry(t, []Tool{healthsTool()}, "sky-dc")
-	if _, err := r.Call(context.Background(), "cube_cos_healths", nil); err != nil {
+	if _, err := r.Call(context.Background(), "cube_cos_healths", nil, true); err != nil {
 		t.Fatal(err)
 	}
 	last := rec.calls[len(rec.calls)-1]
@@ -145,7 +145,7 @@ func TestAnUnconfiguredGetToolIsAModelReadableRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := r.Call(context.Background(), "cube_cos_healths", nil); err == nil {
+	if _, err := r.Call(context.Background(), "cube_cos_healths", nil, true); err == nil {
 		t.Error("an unconfigured Get tool answered instead of refusing")
 	}
 }
@@ -211,7 +211,7 @@ func TestTheDatacenterPlaceholderIsNotAnArgumentEvenByItsRealKey(t *testing.T) {
 	// half-shut: not just that "dc" is unknown, but that the executor slot
 	// itself can never be driven from the caller.
 	r, _, fake := newGetRegistry(t, []Tool{healthsTool()}, "sky-dc")
-	if _, err := r.Call(context.Background(), "cube_cos_healths", map[string]string{"{dc}": "evil"}); err == nil {
+	if _, err := r.Call(context.Background(), "cube_cos_healths", map[string]string{"{dc}": "evil"}, true); err == nil {
 		t.Fatal("the datacenter was supplied under its placeholder key")
 	}
 	if fake.lastPath == "/api/v1/datacenters/evil/healths" {
@@ -232,7 +232,7 @@ func TestAGetToolPastItsDeadlineIsADistinguishableTimeout(t *testing.T) {
 	}
 	r.SetCubeCOSForTest("sky-dc", &fakeCubeCOS{block: true})
 
-	_, err = r.Call(context.Background(), "cube_cos_healths", nil)
+	_, err = r.Call(context.Background(), "cube_cos_healths", nil, true)
 	if !errors.Is(err, ErrToolTimedOut) {
 		t.Fatalf("err = %v, want ErrToolTimedOut", err)
 	}
@@ -251,7 +251,7 @@ func TestADatacenterWithoutAGetterStillRefuses(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	r.ConfigureCubeCOS("sky-dc", nil) // datacenter set, client absent
-	if _, err := r.Call(context.Background(), "cube_cos_healths", nil); err == nil {
+	if _, err := r.Call(context.Background(), "cube_cos_healths", nil, true); err == nil {
 		t.Error("a configured datacenter with no client answered instead of refusing")
 	}
 }

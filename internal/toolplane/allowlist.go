@@ -258,6 +258,24 @@ type Tool struct {
 	// hand-kept copy toolcatalog exists to abolish.
 	Unlisted bool
 
+	// Destructive marks a tool whose effect a person cannot reverse through
+	// this product: it removes something, or overwrites something that was
+	// there.
+	//
+	// A declared property, not a fourth impact class (ADR 0011, amended).
+	// Impact answers "through what interface" and this answers "with what
+	// consequence"; folding them together would double the classes and
+	// re-merge the two questions the consent dial separates. Like the impact
+	// class it is a human judgement with no mechanical check — a Post to a
+	// path ending in the word "delete" is not something this file can spot —
+	// so a misdeclared marker deserves the same review attention.
+	//
+	// No entry sets it today: creates create, the reads read, and the probes
+	// clean up after themselves. ConsentDestructive therefore asks for
+	// nothing at present, which the startup line says out loud rather than
+	// leaving an operator to find out.
+	Destructive bool
+
 	// Argv is the exact command to run. Elements equal to a parameter
 	// placeholder (see Params) are replaced; everything else is literal.
 	// The first element is the executable — resolved from PATH, never a shell.
@@ -645,6 +663,31 @@ var Allowlist = []Tool{
 // New appends these itself when WithProbes is given, so enabling the plane and
 // advertising it are one act: an agent cannot end up offering probe_start with
 // nothing behind it, nor running a probe plane nobody can reach.
+// DestructiveToolsExist reports whether any tool this build can serve declares
+// itself destructive.
+//
+// Computed rather than written down, so the answer stops being "no" by itself
+// on the day someone adds one. Deployment uses it to say at startup that a
+// cluster set to ConsentDestructive will be asked about nothing — a caveat that
+// must disappear when it stops being true, which is exactly what a hand-written
+// comment would fail to do.
+//
+// Both lists, because ProbeControls is served whenever the probe plane is
+// wired: a build where the only destructive tool is a probe still has one.
+func DestructiveToolsExist() bool {
+	for _, t := range Allowlist {
+		if t.Destructive {
+			return true
+		}
+	}
+	for _, t := range ProbeControls {
+		if t.Destructive {
+			return true
+		}
+	}
+	return false
+}
+
 var ProbeControls = []Tool{
 	// Both entries are short calls: starting a probe returns as soon as the
 	// run is launched, and polling one is a map read. Neither holds a tunnel

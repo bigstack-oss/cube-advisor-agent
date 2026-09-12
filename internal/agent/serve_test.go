@@ -55,10 +55,26 @@ func harness(t *testing.T) (*tunnel.Session, *recorder) {
 // harnessWithConsole is harness plus a console handler, for the human plane.
 func harnessWithConsole(t *testing.T, con *console.Handler) (*tunnel.Session, *recorder) {
 	t.Helper()
+	return harnessFull(t, con, nil)
+}
+
+// harnessWith is harness plus a hook that configures the registry — the action
+// level, the consent dial, a wired writer — for tests about what a configured
+// cluster serves rather than about the transport.
+func harnessWith(t *testing.T, configure func(*toolplane.Registry)) (*tunnel.Session, *recorder) {
+	t.Helper()
+	return harnessFull(t, nil, configure)
+}
+
+func harnessFull(t *testing.T, con *console.Handler, configure func(*toolplane.Registry)) (*tunnel.Session, *recorder) {
+	t.Helper()
 	rec := &recorder{}
 	reg, err := toolplane.New(toolplane.Allowlist, rec)
 	if err != nil {
 		t.Fatalf("registry: %v", err)
+	}
+	if configure != nil {
+		configure(reg)
 	}
 	reg.SetRunnerForTest(func(ctx context.Context, argv []string, max int) ([]byte, error) {
 		return []byte("ran: " + strings.Join(argv, " ")), nil

@@ -11,7 +11,7 @@ import (
 
 func describe(t *testing.T, r *Registry) tunnelproto.InstanceProfile {
 	t.Helper()
-	out, err := r.Call(context.Background(), tunnelproto.DescribeInstanceProfile, nil)
+	out, err := r.Call(context.Background(), tunnelproto.DescribeInstanceProfile, nil, true)
 	if err != nil {
 		t.Fatalf("describe: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestDescribeRefusesArguments(t *testing.T) {
 	r.ConfigureInstanceProfile(InstanceProfile{Flavor: "f", Image: "i", Network: "n"})
 
 	_, err := r.Call(context.Background(), tunnelproto.DescribeInstanceProfile,
-		map[string]string{"cluster": "other"})
+		map[string]string{"cluster": "other"}, true)
 	if !errors.Is(err, ErrBadArgument) {
 		t.Fatalf("describe with an argument = %v, want ErrBadArgument", err)
 	}

@@ -59,6 +59,15 @@ func effects(t *testing.T) []effect {
 			observe: func(r *toolplane.Registry) string { return r.Level().String() },
 		},
 		{
+			name:    "consent",
+			file:    toolplane.ConsentFileName,
+			content: "never\n",
+			// The level's rule, for a sharper reason: whoever may write this
+			// file can stop the cluster asking a person before it acts.
+			mode:    0o644,
+			observe: func(r *toolplane.Registry) string { return r.Consent().String() },
+		},
+		{
 			name:    "cube-cos-api access",
 			file:    toolplane.CubeCOSFileName,
 			content: `{"datacenter":"cube-combined","base_url":"http://10.32.1.200:8082"}` + "\n",

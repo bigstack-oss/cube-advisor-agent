@@ -28,7 +28,7 @@ func TestACreateWithoutACredentialIsRefusedAndSaysSoDistinctly(t *testing.T) {
 	})
 	// Deliberately no ConfigureWriter.
 
-	_, err = r.Call(context.Background(), "create_instance", map[string]string{"{name}": "web-03"})
+	_, err = r.Call(context.Background(), "create_instance", map[string]string{"{name}": "web-03"}, true)
 	if err == nil {
 		t.Fatal("a create with no credential succeeded")
 	}
@@ -55,7 +55,7 @@ func TestTheLevelRefusesBeforeTheCredentialDoes(t *testing.T) {
 	}
 	r.ConfigureCubeCOS("dc1", nil)
 
-	_, err = r.Call(context.Background(), "create_instance", map[string]string{"{name}": "web-03"})
+	_, err = r.Call(context.Background(), "create_instance", map[string]string{"{name}": "web-03"}, true)
 	if err == nil {
 		t.Fatal("a create at observe succeeded")
 	}

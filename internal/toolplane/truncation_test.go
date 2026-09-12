@@ -16,7 +16,7 @@ func TestOversizedOutputIsTruncatedNotRefused(t *testing.T) {
 		return []byte(strings.Repeat("x", max)), fmt.Errorf("%w at %d bytes", ErrOutputTruncated, max)
 	}
 
-	out, err := r.Call(context.Background(), "cluster_check", nil)
+	out, err := r.Call(context.Background(), "cluster_check", nil, true)
 	if err != nil {
 		t.Fatalf("a truncated call must succeed, got %v", err)
 	}
@@ -43,7 +43,7 @@ func TestOutputExactlyAtTheCapIsUntouched(t *testing.T) {
 		return []byte(body), nil
 	}
 
-	out, err := r.Call(context.Background(), "cluster_check", nil)
+	out, err := r.Call(context.Background(), "cluster_check", nil, true)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestTruncationNeverSplitsARune(t *testing.T) {
 		return raw, ErrOutputTruncated
 	}
 
-	out, err := r.Call(context.Background(), "cluster_check", nil)
+	out, err := r.Call(context.Background(), "cluster_check", nil, true)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}

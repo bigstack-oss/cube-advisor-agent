@@ -396,7 +396,7 @@ func TestControlToolsStartAndPollThroughTheRegistry(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	out, err := r.Call(context.Background(), "probe_start", map[string]string{"probe": "probe_fio_volume"})
+	out, err := r.Call(context.Background(), "probe_start", map[string]string{"probe": "probe_fio_volume"}, true)
 	if err != nil {
 		t.Fatalf("probe_start: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestControlToolsStartAndPollThroughTheRegistry(t *testing.T) {
 		return res.State != ProbeRunning
 	})
 
-	out, err = r.Call(context.Background(), "probe_status", map[string]string{"run": started.Run})
+	out, err = r.Call(context.Background(), "probe_status", map[string]string{"run": started.Run}, true)
 	if err != nil {
 		t.Fatalf("probe_status: %v", err)
 	}
@@ -438,7 +438,7 @@ func TestAnAgentWithoutAProbePlaneAdvertisesNoProbeTools(t *testing.T) {
 			t.Errorf("an agent with no probe plane advertises %s", n)
 		}
 	}
-	if _, err := r.Call(context.Background(), "probe_start", map[string]string{"probe": "probe_fio_volume"}); !errors.Is(err, ErrUnknownTool) {
+	if _, err := r.Call(context.Background(), "probe_start", map[string]string{"probe": "probe_fio_volume"}, true); !errors.Is(err, ErrUnknownTool) {
 		t.Errorf("err = %v, want ErrUnknownTool", err)
 	}
 }
@@ -452,7 +452,7 @@ func TestControlToolsRefuseAnUndeclaredArgument(t *testing.T) {
 	}
 	_, err = r.Call(context.Background(), "probe_start", map[string]string{
 		"probe": "probe_fio_volume", "runtime": "600",
-	})
+	}, true)
 	if !errors.Is(err, ErrBadArgument) {
 		t.Fatalf("err = %v, want ErrBadArgument for an argument the plane does not take", err)
 	}

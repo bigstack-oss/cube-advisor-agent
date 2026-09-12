@@ -212,6 +212,26 @@ type ChannelOpen struct {
 	ID     uint32      `json:"id"`
 	Kind   ChannelKind `json:"kind"`
 	Target Target      `json:"target"`
+
+	// Approved is the SaaS's claim that a person agreed to this call
+	// (ADR 0011's consent dial, amended).
+	//
+	// A claim, not a proof: it arrives over the tunnel, so a compromised SaaS
+	// can set it on a call nobody saw. The action level is the control that
+	// survives that, because the agent answers it from its own state. This
+	// carries the honest failure instead — a stale mirror or a bug skipping
+	// the question — and makes it a refusal the agent audits rather than an
+	// unattended call nobody notices.
+	//
+	// Absent means false, and false is the safe reading: an older SaaS that
+	// never sets it has its configuring calls refused by a cluster whose own
+	// dial asks for a person, rather than served as though one had. No
+	// deployed cluster has a consent file yet, so nothing working today
+	// changes.
+	//
+	// Omitted when false so an unapproved open is byte-identical to what
+	// every SaaS sent before the field existed.
+	Approved bool `json:"approved,omitempty"`
 }
 
 // Validate checks an open request before the agent acts on it. The SaaS is

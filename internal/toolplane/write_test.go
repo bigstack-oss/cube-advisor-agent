@@ -72,7 +72,7 @@ func writeRegistry(t *testing.T, now func() time.Time) (*Registry, *poster, *rec
 func TestAWriteSendsOnlyWhatTheAllowlistDeclares(t *testing.T) {
 	r, p, _ := writeRegistry(t, nil)
 
-	out, err := r.Call(context.Background(), "create_instance", map[string]string{"{name}": "web-03"})
+	out, err := r.Call(context.Background(), "create_instance", map[string]string{"{name}": "web-03"}, true)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestACallerCannotChooseWhatTheProfileDecides(t *testing.T) {
 	for _, arg := range []string{"{image}", "{flavor}", "{network}", "{project}"} {
 		_, err := r.Call(context.Background(), "create_instance", map[string]string{
 			"{name}": "web-03", arg: "attacker-chosen",
-		})
+		}, true)
 		if !errors.Is(err, ErrBadArgument) {
 			t.Fatalf("%s: err = %v, want ErrBadArgument", arg, err)
 		}
@@ -165,7 +165,7 @@ func TestAnUnconfiguredProfileCreatesNothing(t *testing.T) {
 	p := &poster{}
 	r.SetWriterForTest(BackendOpenStackCompute, p, nil)
 
-	if _, err := r.Call(context.Background(), "create_instance", map[string]string{"{name}": "web-03"}); !errors.Is(err, ErrBadArgument) {
+	if _, err := r.Call(context.Background(), "create_instance", map[string]string{"{name}": "web-03"}, true); !errors.Is(err, ErrBadArgument) {
 		t.Fatalf("err = %v, want a refusal", err)
 	}
 	if p.count() != 0 {
@@ -192,7 +192,7 @@ func TestTheNameShapeRefusesWhatAValueSetWouldHave(t *testing.T) {
 		{"web-", "trailing hyphen"},
 	}
 	for _, c := range refused {
-		if _, err := r.Call(context.Background(), "create_instance", map[string]string{"{name}": c.name}); !errors.Is(err, ErrBadArgument) {
+		if _, err := r.Call(context.Background(), "create_instance", map[string]string{"{name}": c.name}, true); !errors.Is(err, ErrBadArgument) {
 			t.Errorf("%q was admitted (%s): err = %v", c.name, c.why, err)
 		}
 	}
@@ -201,7 +201,7 @@ func TestTheNameShapeRefusesWhatAValueSetWouldHave(t *testing.T) {
 	}
 
 	for _, ok := range []string{"web-03", "a", "web03", strings.Repeat("a", maxDNSLabel)} {
-		if _, err := r.Call(context.Background(), "create_instance", map[string]string{"{name}": ok}); err != nil {
+		if _, err := r.Call(context.Background(), "create_instance", map[string]string{"{name}": ok}, true); err != nil {
 			t.Errorf("%q was refused: %v", ok, err)
 		}
 	}
@@ -213,11 +213,11 @@ func TestARetriedWriteDoesNotCreateASecondInstance(t *testing.T) {
 	r, p, rec := writeRegistry(t, nil)
 	args := map[string]string{"{name}": "web-03"}
 
-	first, err := r.Call(context.Background(), "create_instance", args)
+	first, err := r.Call(context.Background(), "create_instance", args, true)
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	second, err := r.Call(context.Background(), "create_instance", args)
+	second, err := r.Call(context.Background(), "create_instance", args, true)
 	if err != nil {
 		t.Fatalf("retry: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestARetriedWriteDoesNotCreateASecondInstance(t *testing.T) {
 func TestADifferentNameIsADifferentWrite(t *testing.T) {
 	r, p, _ := writeRegistry(t, nil)
 	for _, n := range []string{"web-03", "web-04"} {
-		if _, err := r.Call(context.Background(), "create_instance", map[string]string{"{name}": n}); err != nil {
+		if _, err := r.Call(context.Background(), "create_instance", map[string]string{"{name}": n}, true); err != nil {
 			t.Fatalf("%s: %v", n, err)
 		}
 	}
@@ -264,11 +264,11 @@ func TestTheSameWriteProceedsOnceTheWindowHasPassed(t *testing.T) {
 	r, p, _ := writeRegistry(t, clock)
 	args := map[string]string{"{name}": "web-03"}
 
-	if _, err := r.Call(context.Background(), "create_instance", args); err != nil {
+	if _, err := r.Call(context.Background(), "create_instance", args, true); err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	now = now.Add(writeReplayWindow + time.Minute)
-	if _, err := r.Call(context.Background(), "create_instance", args); err != nil {
+	if _, err := r.Call(context.Background(), "create_instance", args, true); err != nil {
 		t.Fatalf("after the window: %v", err)
 	}
 	if p.count() != 2 {
@@ -283,11 +283,11 @@ func TestAFailedWriteIsNotRemembered(t *testing.T) {
 	p.err = errors.New("api unavailable")
 	args := map[string]string{"{name}": "web-03"}
 
-	if _, err := r.Call(context.Background(), "create_instance", args); err == nil {
+	if _, err := r.Call(context.Background(), "create_instance", args, true); err == nil {
 		t.Fatal("a failing write reported success")
 	}
 	p.err = nil
-	if _, err := r.Call(context.Background(), "create_instance", args); err != nil {
+	if _, err := r.Call(context.Background(), "create_instance", args, true); err != nil {
 		t.Fatalf("the retry of a failed write was refused: %v", err)
 	}
 	if p.count() != 2 {
@@ -303,7 +303,7 @@ func TestALevelRefusalIsLegibleAndShared(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = r.Call(context.Background(), "create_instance", map[string]string{"{name}": "web-03"})
+	_, err = r.Call(context.Background(), "create_instance", map[string]string{"{name}": "web-03"}, true)
 	if !errors.Is(err, ErrRefusedAtLevel) {
 		t.Fatalf("err = %v, want ErrRefusedAtLevel", err)
 	}

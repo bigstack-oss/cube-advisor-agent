@@ -75,14 +75,14 @@ func TestPlanesCannotCross(t *testing.T) {
 		open ChannelOpen
 		ok   bool
 	}{
-		{"tool channel to a tool", ChannelOpen{1, ChannelTool, Target{TargetTool, "cluster_check"}}, true},
-		{"console channel to ssh", ChannelOpen{2, ChannelConsole, Target{TargetSSH, "sky141"}}, true},
-		{"console channel to web", ChannelOpen{3, ChannelConsole, Target{TargetWeb, "dashboard"}}, true},
-		{"tool channel to ssh", ChannelOpen{4, ChannelTool, Target{TargetSSH, "sky141"}}, false},
-		{"tool channel to web", ChannelOpen{5, ChannelTool, Target{TargetWeb, "dashboard"}}, false},
-		{"console channel to a tool", ChannelOpen{6, ChannelConsole, Target{TargetTool, "cluster_check"}}, false},
-		{"ctl is not openable", ChannelOpen{7, ChannelCtl, Target{TargetTool, "cluster_check"}}, false},
-		{"unknown channel kind", ChannelOpen{8, ChannelKind(9), Target{TargetTool, "cluster_check"}}, false},
+		{"tool channel to a tool", ChannelOpen{ID: 1, Kind: ChannelTool, Target: Target{TargetTool, "cluster_check"}}, true},
+		{"console channel to ssh", ChannelOpen{ID: 2, Kind: ChannelConsole, Target: Target{TargetSSH, "sky141"}}, true},
+		{"console channel to web", ChannelOpen{ID: 3, Kind: ChannelConsole, Target: Target{TargetWeb, "dashboard"}}, true},
+		{"tool channel to ssh", ChannelOpen{ID: 4, Kind: ChannelTool, Target: Target{TargetSSH, "sky141"}}, false},
+		{"tool channel to web", ChannelOpen{ID: 5, Kind: ChannelTool, Target: Target{TargetWeb, "dashboard"}}, false},
+		{"console channel to a tool", ChannelOpen{ID: 6, Kind: ChannelConsole, Target: Target{TargetTool, "cluster_check"}}, false},
+		{"ctl is not openable", ChannelOpen{ID: 7, Kind: ChannelCtl, Target: Target{TargetTool, "cluster_check"}}, false},
+		{"unknown channel kind", ChannelOpen{ID: 8, Kind: ChannelKind(9), Target: Target{TargetTool, "cluster_check"}}, false},
 	}
 	for _, c := range cases {
 		err := c.open.Validate()
