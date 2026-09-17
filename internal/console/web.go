@@ -53,10 +53,35 @@ func (a WebAllowlist) Resolve(name string) (string, error) {
 	return hostport, nil
 }
 
+// WebResolver is what a handler asks for an address. A fixed WebAllowlist is
+// one; so is a file read fresh on every channel.
+type WebResolver interface {
+	Resolve(name string) (string, error)
+}
+
+// FileAllowlist resolves against the file each time it is asked.
+//
+// The file changes underneath a running agent -- `advisor target_set` writes
+// it, and config_advisor's Commit seeds one -- and reading it once at startup
+// meant every such change needed a restart. A read per channel costs nothing:
+// a channel is opened by a person clicking a button.
+//
+// A parse error refuses rather than falling back to the last good copy: an
+// allowlist nobody can read is not one to keep enforcing from memory.
+type FileAllowlist struct{ Path string }
+
+func (f FileAllowlist) Resolve(name string) (string, error) {
+	a, err := LoadWebAllowlist(f.Path)
+	if err != nil {
+		return "", err
+	}
+	return a.Resolve(name)
+}
+
 // WebHandler serves web channels for one node.
 type WebHandler struct {
-	// Allow is the only source of addresses. Empty refuses everything.
-	Allow WebAllowlist
+	// Allow is the only source of addresses. Nil refuses everything.
+	Allow WebResolver
 
 	// Dial opens the upstream connection; nil uses a real TCP dialler.
 	Dial Dialer
@@ -67,6 +92,9 @@ type WebHandler struct {
 // Bytes only: the agent parses no HTTP, so there is no request it can be
 // tricked into rewriting.
 func (h *WebHandler) Serve(ctx context.Context, name string, rw io.ReadWriter) error {
+	if h.Allow == nil {
+		return fmt.Errorf("%w: %q", ErrNotAllowed, name)
+	}
 	hostport, err := h.Allow.Resolve(name)
 	if err != nil {
 		return err

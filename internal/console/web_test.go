@@ -132,3 +132,50 @@ func TestAnUnlistedWebTargetIsNeverDialled(t *testing.T) {
 		t.Error("an unlisted target reached the dialler")
 	}
 }
+
+// Reading the file once at startup meant a target added later was refused
+// with "not in this node's web allowlist", naming one the file contained.
+func TestFileAllowlistSeesATargetAddedAfterStartup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "web-targets.json")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"cube-cos":"10.0.0.1:443"}`)
+
+	a := console.FileAllowlist{Path: path}
+	if _, err := a.Resolve("cube-cos-idp"); !errors.Is(err, console.ErrNotAllowed) {
+		t.Fatalf("before it was added: err = %v, want ErrNotAllowed", err)
+	}
+
+	write(`{"cube-cos":"10.0.0.1:443","cube-cos-idp":"10.0.0.1:10443"}`)
+
+	got, err := a.Resolve("cube-cos-idp")
+	if err != nil {
+		t.Fatalf("after it was added: %v", err)
+	}
+	if got != "10.0.0.1:10443" {
+		t.Errorf("resolved to %q, want 10.0.0.1:10443", got)
+	}
+}
+
+// A file that stopped parsing refuses rather than falling back to whatever
+// was read last.
+func TestFileAllowlistRefusesWhenTheFileStopsParsing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "web-targets.json")
+	if err := os.WriteFile(path, []byte(`{"cube-cos":"10.0.0.1:443"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := console.FileAllowlist{Path: path}
+	if _, err := a.Resolve("cube-cos"); err != nil {
+		t.Fatalf("while it parsed: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{ not json`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Resolve("cube-cos"); err == nil {
+		t.Fatal("a target resolved from an unreadable allowlist")
+	}
+}
