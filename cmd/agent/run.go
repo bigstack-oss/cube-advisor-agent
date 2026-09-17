@@ -53,6 +53,8 @@ func runCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "run: no usable identity in %s (enroll first): %v\n", *dir, err)
 		return exitFailed
 	}
+	// Once here, to refuse a malformed file where an operator is watching;
+	// the handler reads it again per channel.
 	webAllow, err := console.LoadWebAllowlist(*webTargets)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
@@ -148,7 +150,7 @@ func runCmd(args []string) int {
 	srv := &agent.Server{
 		Tools:   reg,
 		Console: &console.Handler{NodeID: id.NodeID},
-		Web:     &console.WebHandler{Allow: webAllow},
+		Web:     &console.WebHandler{Allow: console.FileAllowlist{Path: *webTargets}},
 	}
 	backoff := tunnel.DefaultBackoff()
 	guard := tunnel.DefaultFlapGuard()
