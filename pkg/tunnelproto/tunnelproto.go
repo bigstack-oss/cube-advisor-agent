@@ -232,6 +232,15 @@ type ChannelOpen struct {
 	// Omitted when false so an unapproved open is byte-identical to what
 	// every SaaS sent before the field existed.
 	Approved bool `json:"approved,omitempty"`
+
+	// AgentDriven marks a console channel the SaaS opened to run the shell tool
+	// rather than one a human is typing (ADR 0017). The agent serves it only at
+	// action level internal, so an honest SaaS is held to the node's own level.
+	//
+	// Only a console-to-ssh channel may carry it; Validate rejects it elsewhere.
+	// Absent means false — a human console, byte-identical to what every SaaS
+	// sent before the field existed.
+	AgentDriven bool `json:"agentDriven,omitempty"`
 }
 
 // Validate checks an open request before the agent acts on it. The SaaS is
@@ -260,6 +269,14 @@ func (c ChannelOpen) Validate() error {
 		if c.Target.Kind == TargetTool {
 			return fmt.Errorf("tunnelproto: console channel may not target a tool")
 		}
+	}
+	// An agent-driven mark belongs only on a console-to-ssh channel (ADR 0017's
+	// shell). Anywhere else it is malformed, so the protocol cannot carry an
+	// agent-driven tool or web channel even if a caller set the field by
+	// mistake.
+	if c.AgentDriven && (c.Kind != ChannelConsole || c.Target.Kind != TargetSSH) {
+		return fmt.Errorf("tunnelproto: agent-driven mark is only for a console ssh channel, not %s/%s",
+			c.Kind, c.Target.Kind)
 	}
 	return nil
 }

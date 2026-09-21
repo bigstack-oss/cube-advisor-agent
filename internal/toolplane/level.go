@@ -36,9 +36,9 @@ const (
 	// hex_cli.
 	LevelOperate
 	// LevelInternal additionally serves tools that reach past those into
-	// hex_sdk, a config file or a service internal. It admits no shell, no
-	// script parameter and no caller-supplied command; arbitrary one-off
-	// work is the console plane's, under a human.
+	// hex_sdk, a config file or a service internal, and (ADR 0017) is the only
+	// level at which the agent serves an agent-driven console — the shell tool.
+	// The gate is in internal/agent; the shell runs through sshd, not here.
 	LevelInternal
 )
 

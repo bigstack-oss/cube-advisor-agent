@@ -1,6 +1,10 @@
 package tunnelproto
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 // The protocol's reason for existing: a channel-open cannot name an address.
 // If any of these were accepted, a compromised or prompt-injected SaaS could
@@ -154,4 +158,45 @@ func indexOf(h, n string) int {
 		}
 	}
 	return -1
+}
+
+func TestAgentDrivenMarkOnlyOnConsoleSSH(t *testing.T) {
+	ssh := Target{Kind: TargetSSH, Name: "sky141"}
+	cases := []struct {
+		name string
+		open ChannelOpen
+		ok   bool
+	}{
+		{"console ssh may be agent-driven",
+			ChannelOpen{Kind: ChannelConsole, Target: ssh, AgentDriven: true}, true},
+		{"console ssh human is still fine",
+			ChannelOpen{Kind: ChannelConsole, Target: ssh}, true},
+		{"agent-driven tool channel is malformed",
+			ChannelOpen{Kind: ChannelTool, Target: Target{Kind: TargetTool, Name: "cluster_check"}, AgentDriven: true}, false},
+		{"agent-driven web console is malformed",
+			ChannelOpen{Kind: ChannelConsole, Target: Target{Kind: TargetWeb, Name: "dashboard"}, AgentDriven: true}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.open.Validate()
+			if c.ok && err != nil {
+				t.Errorf("Validate() = %v, want nil", err)
+			}
+			if !c.ok && err == nil {
+				t.Error("Validate() = nil, want an error rejecting the agent-driven mark")
+			}
+		})
+	}
+}
+
+// The mark is omitted on the wire when false, so a human console open is
+// byte-identical to what every SaaS sent before the field existed.
+func TestAgentDrivenOmittedWhenFalse(t *testing.T) {
+	b, err := json.Marshal(ChannelOpen{Kind: ChannelConsole, Target: Target{Kind: TargetSSH, Name: "sky141"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "agentDriven") {
+		t.Errorf("a human console open carries agentDriven: %s", b)
+	}
 }

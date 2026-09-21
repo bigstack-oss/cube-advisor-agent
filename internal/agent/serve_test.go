@@ -553,3 +553,97 @@ func TestThePlanesCannotReachEachOther(t *testing.T) {
 		t.Error("a tool channel naming a node validated; a tool call could open a shell")
 	}
 }
+
+// harnessConsoleAtLevel is harnessWithConsole plus an action level, for the
+// ADR 0017 gate: an agent-driven console is served only at internal.
+func harnessConsoleAtLevel(t *testing.T, con *console.Handler, level toolplane.Level) (*tunnel.Session, *recorder) {
+	t.Helper()
+	return harnessFull(t, con, func(r *toolplane.Registry) { toolplane.WithLevel(level)(r) })
+}
+
+// Below internal, an agent-driven console never reaches sshd: the gate refuses
+// it with the generic reason, so a compromised or over-eager SaaS cannot run
+// the shell on a cluster whose own node did not opt in (ADR 0017).
+func TestAgentDrivenConsoleRefusedBelowInternal(t *testing.T) {
+	for _, level := range []toolplane.Level{toolplane.LevelObserve, toolplane.LevelOperate} {
+		t.Run(level.String(), func(t *testing.T) {
+			saas, _ := harnessConsoleAtLevel(t, &console.Handler{NodeID: "sky141", Dial: echoSSHD(t)}, level)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			ch, err := saas.OpenChannel(ctx, 20, tunnelproto.ChannelConsole,
+				tunnelproto.Target{Kind: tunnelproto.TargetSSH, Name: "sky141"}, tunnel.AgentDriven())
+			if err != nil {
+				t.Fatalf("open agent-driven console: %v", err)
+			}
+			defer ch.Close()
+
+			_ = ch.SetDeadline(time.Now().Add(5 * time.Second))
+			// A refused channel yields the generic reason and no echo. Writing
+			// "hello" would come back "HELLO" only if it reached the fake sshd.
+			_, _ = ch.Write([]byte("hello"))
+			body, _ := io.ReadAll(ch)
+			if strings.Contains(string(body), "HELLO") {
+				t.Errorf("agent-driven console at %s reached sshd; body=%q", level, body)
+			}
+			if !strings.Contains(string(body), tunnelproto.RefusedReason) {
+				t.Errorf("body = %q, want the generic refusal", body)
+			}
+		})
+	}
+}
+
+// At internal, an agent-driven console is served exactly as a human one: it
+// reaches the node's sshd.
+func TestAgentDrivenConsoleServedAtInternal(t *testing.T) {
+	saas, _ := harnessConsoleAtLevel(t, &console.Handler{NodeID: "sky141", Dial: echoSSHD(t)}, toolplane.LevelInternal)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ch, err := saas.OpenChannel(ctx, 21, tunnelproto.ChannelConsole,
+		tunnelproto.Target{Kind: tunnelproto.TargetSSH, Name: "sky141"}, tunnel.AgentDriven())
+	if err != nil {
+		t.Fatalf("open agent-driven console: %v", err)
+	}
+	defer ch.Close()
+
+	if _, err := ch.Write([]byte("hello")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = ch.SetDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(ch, buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(buf) != "HELLO" {
+		t.Errorf("echo = %q, want HELLO", buf)
+	}
+}
+
+// A human console (no agent-driven mark) is unaffected by the action level:
+// console access is its own permission, gated on the node and in the SaaS, not
+// by the level the AI plane obeys.
+func TestHumanConsoleUnaffectedByLevel(t *testing.T) {
+	saas, _ := harnessConsoleAtLevel(t, &console.Handler{NodeID: "sky141", Dial: echoSSHD(t)}, toolplane.LevelObserve)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ch, err := saas.OpenChannel(ctx, 22, tunnelproto.ChannelConsole,
+		tunnelproto.Target{Kind: tunnelproto.TargetSSH, Name: "sky141"})
+	if err != nil {
+		t.Fatalf("open human console: %v", err)
+	}
+	defer ch.Close()
+
+	if _, err := ch.Write([]byte("hello")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = ch.SetDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(ch, buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(buf) != "HELLO" {
+		t.Errorf("echo = %q, want HELLO", buf)
+	}
+}

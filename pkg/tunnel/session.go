@@ -176,6 +176,13 @@ func ApprovedByPerson() OpenOption {
 	return func(o *tunnelproto.ChannelOpen) { o.Approved = true }
 }
 
+// AgentDriven marks a console channel as one the SaaS opened to run the shell
+// tool rather than one a human is typing (ADR 0017). Set only for the shell;
+// the agent serves it only at action level internal.
+func AgentDriven() OpenOption {
+	return func(o *tunnelproto.ChannelOpen) { o.AgentDriven = true }
+}
+
 func (s *Session) OpenChannel(ctx context.Context, id uint32, kind tunnelproto.ChannelKind, target tunnelproto.Target, opts ...OpenOption) (net.Conn, error) {
 	open := tunnelproto.ChannelOpen{ID: id, Kind: kind, Target: target}
 	for _, o := range opts {
