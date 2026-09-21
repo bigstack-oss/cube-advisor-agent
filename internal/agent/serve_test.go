@@ -647,3 +647,43 @@ func TestHumanConsoleUnaffectedByLevel(t *testing.T) {
 		t.Errorf("echo = %q, want HELLO", buf)
 	}
 }
+
+// A level refusal must reach the SaaS as the one reason the executor is allowed
+// to explain (RefusedAtLevelReason), not the generic refusal — otherwise the
+// SaaS cannot tell the model why, and the model reports a bare block (the
+// 2026-09-16 cube-combined bug, cube-ai-advisor#232). create_instance at
+// observe is refused by the level before anything else.
+func TestLevelRefusalReasonReachesTheSaaS(t *testing.T) {
+	saas, _ := harness(t) // default level is observe
+	res := callConfiguringTool(t, saas, 1, false)
+	if res.OK {
+		t.Fatal("create_instance should be refused at observe")
+	}
+	if res.Error != tunnelproto.RefusedAtLevelReason {
+		t.Errorf("wire reason = %q, want RefusedAtLevelReason so the SaaS can explain it", res.Error)
+	}
+}
+
+// Every other refusal stays deliberately unspecific: a call the level allows
+// but the consent dial gates comes back as the generic reason, so the level
+// reason is the one exception, not a new habit of explaining refusals.
+func TestOtherRefusalsStayGeneric(t *testing.T) {
+	saas, _ := harnessConsoleAtLevel(t, nil, toolplane.LevelInternal) // allowed by level, gated by consent
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := saas.OpenChannel(ctx, 7, tunnelproto.ChannelTool,
+		tunnelproto.Target{Kind: tunnelproto.TargetTool, Name: "create_instance"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// A name the executor's allowlist rejects — a non-level refusal.
+	_ = json.NewEncoder(conn).Encode(map[string]string{"{name}": "Bad Name!!"})
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var res tunnelproto.ToolResult
+	if err := json.NewDecoder(conn).Decode(&res); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if res.OK || res.Error == tunnelproto.RefusedAtLevelReason {
+		t.Errorf("a non-level refusal leaked a specific reason: %+v", res)
+	}
+}

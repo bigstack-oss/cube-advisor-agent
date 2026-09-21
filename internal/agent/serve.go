@@ -197,11 +197,17 @@ func (s *Server) serveTool(ctx context.Context, ch *tunnel.Channel) {
 	// the one that was checked.
 	out, err := s.Tools.Call(ctx, name, args, ch.Open.Approved)
 	if err != nil {
-		// Refusals and failures are reported the same way on the wire. The
-		// distinction — and the reason — is in the local audit log, which the
-		// customer reads and the SaaS does not.
+		// Failures are reported generically, with one exception: a level
+		// refusal carries RefusedAtLevelReason, the one reason the protocol
+		// allows to be sent. Without it the SaaS cannot explain the refusal and
+		// the model reports a bare block (cube-ai-advisor#232). It names no tool
+		// and no value, so it leaks nothing a probing SaaS could map.
 		log.Printf("agent: %s failed: %v", name, err)
-		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
+		reason := tunnelproto.RefusedReason
+		if errors.Is(err, toolplane.ErrRefusedAtLevel) {
+			reason = tunnelproto.RefusedAtLevelReason
+		}
+		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: reason})
 		return
 	}
 	_ = writeResult(ch, tunnelproto.ToolResult{OK: true, Output: string(out)})
