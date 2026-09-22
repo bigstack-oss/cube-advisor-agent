@@ -84,6 +84,15 @@ type HelloAck struct {
 	Accepted        bool   `json:"accepted"`
 	ProtocolVersion int    `json:"protocolVersion"` // what the SaaS will speak
 	Reason          string `json:"reason,omitempty"`
+
+	// ConsoleOrigins maps a web target to the origin a browser reaches it on
+	// through the web console -- "scheme://host[:port]", with "*" standing in
+	// for the session id where the mode puts one in the hostname.
+	//
+	// Sent on every connect, not once at enrolment: a cluster that learned
+	// these once would go on trusting a stale set. Advisory -- the agent
+	// records it and does not act on it.
+	ConsoleOrigins map[string]string `json:"consoleOrigins,omitempty"`
 }
 
 // Negotiate decides whether to serve an agent's Hello.

@@ -171,6 +171,11 @@ func runCmd(args []string) int {
 			break // only a cancelled context ends Reconnect
 		}
 		log.Printf("agent: connected to %s", serverAddr)
+		// Recorded for the node's own config management to act on. Never
+		// fatal: the next connect writes it again.
+		if err := identity.RecordConsoleOrigins(*dir, sess.Ack().ConsoleOrigins); err != nil {
+			log.Printf("agent: could not record the console origins: %v", err)
+		}
 		started := time.Now()
 		if err := srv.Serve(ctx, sess); err != nil {
 			log.Printf("agent: session ended: %v", err)
