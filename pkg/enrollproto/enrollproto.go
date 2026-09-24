@@ -42,4 +42,11 @@ type Response struct {
 	// it trusts for the tunnel, so it talks to the service that enrolled it
 	// rather than anything holding a publicly-issued certificate.
 	CA string `json:"ca"`
+
+	// ActionLevel and Consent are the dials the Advisor will serve this
+	// cluster at — the cluster's own settings clamped by its tenants — and
+	// are what the node writes beside its identity. Empty from an Advisor
+	// that predates them; the node then keeps whatever it already has.
+	ActionLevel string `json:"actionLevel,omitempty"`
+	Consent     string `json:"consent,omitempty"`
 }

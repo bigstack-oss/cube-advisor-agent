@@ -43,9 +43,13 @@ const keyFileMode os.FileMode = 0o600
 type Identity struct {
 	ClusterID string
 	NodeID    string
-	key       *ecdsa.PrivateKey
-	certPEM   []byte
-	caPEM     []byte
+	// ActionLevel and Consent as the Advisor reported them at enrolment;
+	// not part of the saved identity — the toolplane keeps its own files.
+	ActionLevel string
+	Consent     string
+	key         *ecdsa.PrivateKey
+	certPEM     []byte
+	caPEM       []byte
 }
 
 // NewKey generates a fresh keypair on this machine.
