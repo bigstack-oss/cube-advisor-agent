@@ -294,3 +294,32 @@ func TestUsageMentionsEverySubcommand(t *testing.T) {
 		}
 	}
 }
+
+
+// -force used to delete the identity before contacting the server, so a
+// refused token or an unreachable Advisor left the node with nothing while the
+// wrapper printed "nothing was changed". The old identity has to survive until
+// a new one exists.
+func TestForceKeepsTheIdentityWhenEnrolmentFails(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"agent.key", "agent.crt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "token refused", http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	code := enrollCmd([]string{"-server", srv.URL, "-cluster", "c", "-dir", dir, "-token", "t", "-force"})
+	if code == exitOK {
+		t.Fatal("enrolment succeeded against a server that refuses every token")
+	}
+	for _, name := range []string{"agent.key", "agent.crt"} {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(b) != "old" {
+			t.Errorf("%s: the existing identity was removed before the server answered (err=%v, body=%q)", name, err, b)
+		}
+	}
+}

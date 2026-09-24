@@ -161,18 +161,25 @@ func enrollCmd(args []string) int {
 			*cluster, resolvedNode, *dir)
 		return exitAlready
 	}
-	if *force {
-		if err := identity.Remove(*dir); err != nil {
-			fmt.Fprintf(os.Stderr, "enroll: cannot replace the existing identity: %v\n", err)
-			return exitFailed
-		}
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	e := &identity.Enroller{BaseURL: strings.TrimRight(*server, "/"), AgentVersion: version}
-	id, err := e.EnrollAndSave(ctx, *dir, *cluster, resolvedNode, tok)
+	var id *identity.Identity
+	if *force {
+		// The server answers first; the old identity is removed only once a
+		// new one exists to replace it, so a refused token or an unreachable
+		// Advisor leaves the node exactly as it was.
+		id, err = e.Enroll(ctx, *cluster, resolvedNode, tok)
+		if err == nil {
+			if err = identity.Remove(*dir); err == nil {
+				err = id.Save(*dir)
+			}
+		}
+	} else {
+		id, err = e.EnrollAndSave(ctx, *dir, *cluster, resolvedNode, tok)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "enroll: %v\n", err)
 		switch {
