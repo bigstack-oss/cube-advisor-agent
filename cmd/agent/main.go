@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
+	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 )
 
 // defaultTunnelPort is the SaaS tunnel listener's chart default. It is what
@@ -215,6 +216,22 @@ func enrollCmd(args []string) int {
 	// The fingerprint is printed because an operator compares it against the one
 	// the SaaS shows. Enrollment is not finished until a human has done that.
 	fmt.Printf("Enrolled %s as node %s\n", *cluster, resolvedNode)
+	// The Advisor's dials for this cluster are what the node serves at; an
+	// older Advisor says nothing and the node keeps what it has.
+	if id.ActionLevel != "" {
+		if err := toolplane.WriteLevel(*dir, id.ActionLevel); err != nil {
+			fmt.Fprintf(os.Stderr, "enroll: enrolled, but could not record the action level: %v\n", err)
+		} else {
+			fmt.Printf("Action level: %s (as the Advisor records it)\n", id.ActionLevel)
+		}
+	}
+	if id.Consent != "" {
+		if err := toolplane.WriteConsent(*dir, id.Consent); err != nil {
+			fmt.Fprintf(os.Stderr, "enroll: enrolled, but could not record the consent setting: %v\n", err)
+		} else {
+			fmt.Printf("Ask a person: %s (as the Advisor records it)\n", id.Consent)
+		}
+	}
 	fmt.Printf("Fingerprint: %s\n", fp)
 	fmt.Printf("Compare this with the fingerprint shown by the Advisor before approving.\n")
 	return exitOK

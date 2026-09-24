@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
+	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/enrollproto"
 )
 
@@ -159,6 +160,12 @@ func TestDeriveTunnelAddrRejectsAServerWithNoHost(t *testing.T) {
 // signer's chain — it only checks the returned certificate matches the private
 // key the agent generated — so the signer need not be a consistent CA.
 func fakeEnrollServer(t *testing.T) *httptest.Server {
+	return fakeEnrollServerWithDials(t, "", "")
+}
+
+// fakeEnrollServerWithDials also names the cluster's action level and consent,
+// as an Advisor from 0.4.21 does.
+func fakeEnrollServerWithDials(t *testing.T, level, consent string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -201,8 +208,39 @@ func fakeEnrollServer(t *testing.T) *httptest.Server {
 			t.Fatalf("sign: %v", err)
 		}
 		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-		_ = json.NewEncoder(w).Encode(enrollproto.Response{Certificate: string(certPEM)})
+		_ = json.NewEncoder(w).Encode(enrollproto.Response{Certificate: string(certPEM), ActionLevel: level, Consent: consent})
 	}))
+}
+
+// The dials the Advisor will serve at are what the node writes beside its
+// identity — the token the operator pasted is not the last word, the
+// cluster's record is. Silence from an older Advisor leaves the files alone.
+func TestEnrollRecordsTheDialsTheAdvisorReports(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeEnrollServerWithDials(t, "operate", "destructive")
+	defer srv.Close()
+	if code := enrollCmd([]string{"-server", srv.URL, "-cluster", "c", "-dir", dir, "-token", "t"}); code != exitOK {
+		t.Fatalf("enrollCmd exit = %d", code)
+	}
+	if l, err := toolplane.ReadLevel(dir); err != nil || l != toolplane.LevelOperate {
+		t.Errorf("level = %v, %v; want operate", l, err)
+	}
+	if c, err := toolplane.ReadConsent(dir); err != nil || c != toolplane.ConsentDestructive {
+		t.Errorf("consent = %v, %v; want destructive", c, err)
+	}
+
+	quiet := t.TempDir()
+	if err := os.WriteFile(filepath.Join(quiet, toolplane.LevelFileName), []byte("internal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := fakeEnrollServer(t)
+	defer old.Close()
+	if code := enrollCmd([]string{"-server", old.URL, "-cluster", "c", "-dir", quiet, "-token", "t"}); code != exitOK {
+		t.Fatalf("enrollCmd exit = %d", code)
+	}
+	if l, _ := toolplane.ReadLevel(quiet); l != toolplane.LevelInternal {
+		t.Errorf("an Advisor that named no level changed the node's to %v", l)
+	}
 }
 
 // The end-to-end proof for issue #19: a successful enrolment leaves behind a
