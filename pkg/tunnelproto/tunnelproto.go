@@ -93,6 +93,12 @@ type HelloAck struct {
 	// these once would go on trusting a stale set. Advisory -- the agent
 	// records it and does not act on it.
 	ConsoleOrigins map[string]string `json:"consoleOrigins,omitempty"`
+
+	// CurrentRelease is the agent version this SaaS would install today. Sent
+	// on every connect so an operator can be told a newer agent exists; the
+	// agent records it and does not act on it — updating what runs as root on
+	// a customer node is the customer's command to give (`advisor upgrade`).
+	CurrentRelease string `json:"currentRelease,omitempty"`
 }
 
 // Negotiate decides whether to serve an agent's Hello.

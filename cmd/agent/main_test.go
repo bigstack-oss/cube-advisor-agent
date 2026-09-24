@@ -191,10 +191,10 @@ func fakeEnrollServer(t *testing.T) *httptest.Server {
 				CommonName:         csr.Subject.CommonName,
 				OrganizationalUnit: csr.Subject.OrganizationalUnit,
 			},
-			NotBefore: time.Now().Add(-time.Minute),
-			NotAfter:     time.Now().Add(time.Hour),
-			KeyUsage:     x509.KeyUsageDigitalSignature,
-			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			NotBefore:   time.Now().Add(-time.Minute),
+			NotAfter:    time.Now().Add(time.Hour),
+			KeyUsage:    x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		}
 		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, signer)
 		if err != nil {
@@ -294,7 +294,6 @@ func TestUsageMentionsEverySubcommand(t *testing.T) {
 		}
 	}
 }
-
 
 // -force used to delete the identity before contacting the server, so a
 // refused token or an unreachable Advisor left the node with nothing while the

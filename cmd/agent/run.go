@@ -176,6 +176,14 @@ func runCmd(args []string) int {
 		if err := identity.RecordConsoleOrigins(*dir, sess.Ack().ConsoleOrigins); err != nil {
 			log.Printf("agent: could not record the console origins: %v", err)
 		}
+		// Likewise advisory: which agent the SaaS would install today. The
+		// node's tooling compares it with this binary and tells the operator.
+		if cur := sess.Ack().CurrentRelease; cur != "" && cur != version {
+			log.Printf("agent: this is %s; the Advisor's current release is %s — run `advisor upgrade` on the node to update", version, cur)
+		}
+		if err := identity.RecordCurrentRelease(*dir, sess.Ack().CurrentRelease); err != nil {
+			log.Printf("agent: could not record the current release: %v", err)
+		}
 		started := time.Now()
 		if err := srv.Serve(ctx, sess); err != nil {
 			log.Printf("agent: session ended: %v", err)
