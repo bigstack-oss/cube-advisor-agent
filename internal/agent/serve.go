@@ -63,6 +63,13 @@ const acceptErrorPause = 200 * time.Millisecond
 // stall the accept loop, or one slow call would block every other channel on
 // the connection — including the console channels a human is waiting on.
 func (s *Server) Serve(ctx context.Context, sess *tunnel.Session) error {
+	// mux.Accept has no context: it returns only when a channel opens or the
+	// session closes. So a cancelled ctx — SIGTERM, in practice — closes the
+	// session, which is what makes the accept below (and every handler's
+	// channel I/O) return instead of waiting for systemd's kill.
+	stop := context.AfterFunc(ctx, func() { _ = sess.Close() })
+	defer stop()
+
 	var wg sync.WaitGroup
 	defer wg.Wait()
 

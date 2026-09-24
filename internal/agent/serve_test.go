@@ -687,3 +687,46 @@ func TestOtherRefusalsStayGeneric(t *testing.T) {
 		t.Errorf("a non-level refusal leaked a specific reason: %+v", res)
 	}
 }
+
+// SIGTERM cancels the agent's context, and nothing else: the SaaS keeps the
+// session open. On the 1cc r630 every `systemctl restart` waited the full 90 s
+// stop timeout and ended in SIGKILL, because Accept blocked with no context.
+func TestServeReturnsWhenTheContextIsCancelled(t *testing.T) {
+	rec := &recorder{}
+	reg, err := toolplane.New(toolplane.Allowlist, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := connPair(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	saasCh := make(chan *tunnel.Session, 1)
+	go func() {
+		s, _ := tunnel.Accept(context.Background(), b, tunnelproto.Negotiate)
+		saasCh <- s
+	}()
+	agentSess, err := tunnel.Dial(ctx, a, tunnelproto.Hello{
+		ClusterID: "c", Fingerprint: "f", AgentVersion: "0.1.0",
+		ProtocolVersion: tunnelproto.Version,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saas := <-saasCh
+	defer saas.Close()
+
+	srv := &Server{Tools: reg}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx, agentSess) }()
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("Serve returned %v when told to stop", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after its context was cancelled — the process would wait for SIGKILL")
+	}
+}
