@@ -232,6 +232,11 @@ func enrollCmd(args []string) int {
 			fmt.Printf("Ask a person: %s (as the Advisor records it)\n", id.Consent)
 		}
 	}
+	if id.ConsoleCA != "" {
+		if err := identity.RecordConsoleCA(*dir, id.ConsoleCA); err != nil {
+			fmt.Fprintf(os.Stderr, "enroll: enrolled, but could not record the console CA: %v\n", err)
+		}
+	}
 	fmt.Printf("Fingerprint: %s\n", fp)
 	fmt.Printf("Compare this with the fingerprint shown by the Advisor before approving.\n")
 	return exitOK

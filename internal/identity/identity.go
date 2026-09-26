@@ -47,9 +47,12 @@ type Identity struct {
 	// not part of the saved identity — the toolplane keeps its own files.
 	ActionLevel string
 	Consent     string
-	key         *ecdsa.PrivateKey
-	certPEM     []byte
-	caPEM       []byte
+	// ConsoleCA as the Advisor reported it; written beside the identity as
+	// console-ca.pub for the OS to install.
+	ConsoleCA string
+	key       *ecdsa.PrivateKey
+	certPEM   []byte
+	caPEM     []byte
 }
 
 // NewKey generates a fresh keypair on this machine.

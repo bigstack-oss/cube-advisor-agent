@@ -119,6 +119,7 @@ func (e *Enroller) Enroll(ctx context.Context, clusterID, nodeID, token string) 
 		NodeID:      nodeID,
 		ActionLevel: out.ActionLevel,
 		Consent:     out.Consent,
+		ConsoleCA:   out.ConsoleCA,
 		key:         key,
 		certPEM:     []byte(out.Certificate),
 		caPEM:       []byte(out.CA),
