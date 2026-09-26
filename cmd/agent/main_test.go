@@ -166,6 +166,12 @@ func fakeEnrollServer(t *testing.T) *httptest.Server {
 // fakeEnrollServerWithDials also names the cluster's action level and consent,
 // as an Advisor from 0.4.21 does.
 func fakeEnrollServerWithDials(t *testing.T, level, consent string) *httptest.Server {
+	return fakeEnrollServerFull(t, level, consent, "")
+}
+
+// fakeEnrollServerFull also names the console CA, as an Advisor with a
+// console does.
+func fakeEnrollServerFull(t *testing.T, level, consent, consoleCA string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -208,7 +214,7 @@ func fakeEnrollServerWithDials(t *testing.T, level, consent string) *httptest.Se
 			t.Fatalf("sign: %v", err)
 		}
 		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-		_ = json.NewEncoder(w).Encode(enrollproto.Response{Certificate: string(certPEM), ActionLevel: level, Consent: consent})
+		_ = json.NewEncoder(w).Encode(enrollproto.Response{Certificate: string(certPEM), ActionLevel: level, Consent: consent, ConsoleCA: consoleCA})
 	}))
 }
 
@@ -358,5 +364,31 @@ func TestForceKeepsTheIdentityWhenEnrolmentFails(t *testing.T) {
 		if err != nil || string(b) != "old" {
 			t.Errorf("%s: the existing identity was removed before the server answered (err=%v, body=%q)", name, err, b)
 		}
+	}
+}
+
+// The console CA the Advisor reports lands beside the identity, where the OS
+// installs it into sshd; an Advisor with no console leaves nothing behind.
+func TestEnrollRecordsTheConsoleCA(t *testing.T) {
+	dir := t.TempDir()
+	const line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtestkeytestkeytestkeytestkeytestkeytestk cube-advisor-console"
+	srv := fakeEnrollServerFull(t, "observe", "always", line)
+	defer srv.Close()
+	if code := enrollCmd([]string{"-server", srv.URL, "-cluster", "c", "-dir", dir, "-token", "t"}); code != exitOK {
+		t.Fatalf("enrollCmd exit = %d", code)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, identity.ConsoleCAFileName))
+	if err != nil || string(b) != line+"\n" {
+		t.Errorf("console-ca.pub = %q, %v; want the reported line", b, err)
+	}
+
+	none := t.TempDir()
+	quiet := fakeEnrollServer(t)
+	defer quiet.Close()
+	if code := enrollCmd([]string{"-server", quiet.URL, "-cluster", "c", "-dir", none, "-token", "t"}); code != exitOK {
+		t.Fatalf("enrollCmd exit = %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(none, identity.ConsoleCAFileName)); !os.IsNotExist(err) {
+		t.Errorf("an Advisor with no console left a console-ca.pub behind (%v)", err)
 	}
 }

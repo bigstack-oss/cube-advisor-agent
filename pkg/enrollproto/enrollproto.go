@@ -49,4 +49,10 @@ type Response struct {
 	// that predates them; the node then keeps whatever it already has.
 	ActionLevel string `json:"actionLevel,omitempty"`
 	Consent     string `json:"consent,omitempty"`
+
+	// ConsoleCA is the Advisor's console SSH CA, one authorized-keys line —
+	// what a node puts in TrustedUserCAKeys so recorded console sessions can
+	// log in. Public material; the node installs it only when its token
+	// granted console access. Empty when the Advisor has no console.
+	ConsoleCA string `json:"consoleCa,omitempty"`
 }

@@ -76,3 +76,16 @@ func RecordConsoleOrigins(dir string, origins map[string]string) error {
 	}
 	return nil
 }
+
+// ConsoleCAFileName is where RecordConsoleCA writes, inside the identity dir.
+const ConsoleCAFileName = "console-ca.pub"
+
+// RecordConsoleCA writes the Advisor's console CA as one authorized-keys
+// line. World-readable: it is a public key, and sshd reads it as root.
+func RecordConsoleCA(dir, line string) error {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil
+	}
+	return os.WriteFile(filepath.Join(dir, ConsoleCAFileName), []byte(line+"\n"), 0o644)
+}
