@@ -210,18 +210,20 @@ func TestBuildRefusesAnEmptyDirectory(t *testing.T) {
 	}
 }
 
-// The manifest must not digest itself or its own signature.
-func TestBuildSkipsTheManifestAndSignature(t *testing.T) {
+// The manifest must not digest itself or its own signatures.
+func TestBuildSkipsTheManifestAndSignatures(t *testing.T) {
 	dir, _ := releaseDir(t)
-	if err := os.WriteFile(filepath.Join(dir, SignatureName), []byte("sig"), 0o644); err != nil {
-		t.Fatal(err)
+	for _, n := range []string{SignatureName, MLDSASignatureName} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("sig"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	m, err := Build(dir, releaseArtifacts, "0.2.0", "abc", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, a := range m.Artifacts {
-		if a.Name == ManifestName || a.Name == SignatureName {
+		if IsReleaseMetadata(a.Name) {
 			t.Errorf("manifest lists %s", a.Name)
 		}
 	}

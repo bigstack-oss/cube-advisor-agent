@@ -6,7 +6,9 @@
 // artifact it verifies, or one compromised pipeline defeats both (ADR 0003) —
 // and it is plain shell, small enough that a reviewer can read all of it:
 //
-//	openssl dgst -sha256 -verify release.pub -signature manifest.sig manifest.txt
+//	openssl dgst -sha384 -verify release.pub -signature manifest.txt.sig manifest.txt
+//	openssl pkeyutl -verify -rawin -pubin -inkey release-mldsa87.pub \
+//	    -in manifest.txt -sigfile manifest.txt.mldsa87.sig
 //	sha256sum -c manifest.txt
 //
 // So the manifest is exactly what sha256sum already understands, with metadata
@@ -148,7 +150,7 @@ func ParseManifest(r io.Reader) (Manifest, error) {
 //     verifier requires every entry of a whole-release check to be present — so
 //     that release could never verify again.
 //
-// The manifest and its signature are not artifacts and are skipped: a manifest
+// The manifest and its signatures are not artifacts and are skipped: a manifest
 // cannot contain its own digest.
 func Build(dir string, want []string, version, commit string, protocolVersion int) (Manifest, error) {
 	entries, err := os.ReadDir(dir)
@@ -162,7 +164,7 @@ func Build(dir string, want []string, version, commit string, protocolVersion in
 	}
 	present := map[string]bool{}
 	for _, e := range entries {
-		if e.IsDir() || e.Name() == ManifestName || e.Name() == SignatureName {
+		if e.IsDir() || IsReleaseMetadata(e.Name()) {
 			continue
 		}
 		if !asked[e.Name()] {
@@ -194,11 +196,19 @@ func Build(dir string, want []string, version, commit string, protocolVersion in
 	return m, nil
 }
 
-// Names of the files a release publishes alongside its artifacts.
+// Names of the files a release publishes alongside its artifacts. A release is
+// signed twice, and a node requires both: ECDSA P-384 over SHA-384 and ML-DSA-87.
 const (
-	ManifestName  = "manifest.txt"
-	SignatureName = "manifest.txt.sig"
+	ManifestName       = "manifest.txt"
+	SignatureName      = "manifest.txt.sig"
+	MLDSASignatureName = "manifest.txt.mldsa87.sig"
 )
+
+// IsReleaseMetadata reports whether name is the manifest or one of its
+// signatures rather than an artifact.
+func IsReleaseMetadata(name string) bool {
+	return name == ManifestName || name == SignatureName || name == MLDSASignatureName
+}
 
 // WriteManifest renders m into dir.
 func WriteManifest(dir string, m Manifest) error {

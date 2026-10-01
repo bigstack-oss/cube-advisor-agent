@@ -106,11 +106,14 @@ The manifest is sha256sum's own format, with metadata in comment lines that
 full:
 
 ```sh
-openssl dgst -sha256 -verify release.pub -signature manifest.txt.sig manifest.txt
+openssl dgst -sha384 -verify release.pub -signature manifest.txt.sig manifest.txt
+openssl pkeyutl -verify -rawin -pubin -inkey release-mldsa87.pub \
+    -in manifest.txt -sigfile manifest.txt.mldsa87.sig
 sha256sum -c manifest.txt
 ```
 
-Two commands, no bespoke parser on the verifying side, because a bespoke parser
+A release carries two signatures and a node requires both: ECDSA P-384 and
+ML-DSA-87 (post-quantum). No bespoke parser on the verifying side, because a bespoke parser
 written in shell is where the bugs would be. The public key is baked into the
 CubeCOS image; this repository is not its source.
 
