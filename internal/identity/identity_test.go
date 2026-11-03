@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -529,5 +530,41 @@ func TestLoadRefusesACertificateWithoutAClusterOU(t *testing.T) {
 				t.Errorf("error should name the missing cluster id: %v", err)
 			}
 		})
+	}
+}
+
+// #216: the request names the protocol this agent speaks, so the Advisor can
+// refuse an incompatible agent by name instead of with an opaque failure.
+func TestEnrollmentSendsTheProtocolVersion(t *testing.T) {
+	var sent []byte
+	ca, caKey := testCA(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent, _ = readAll(r)
+		writeSignedResponse(t, w, sent, ca, caKey)
+	}))
+	defer srv.Close()
+
+	e := &Enroller{BaseURL: srv.URL, HTTPClient: srv.Client()}
+	if _, err := e.Enroll(context.Background(), "acme-prod-01", "sky142", "pairing-token"); err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	var req EnrollRequest
+	if err := json.Unmarshal(sent, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.ProtocolVersion != tunnelproto.Version {
+		t.Errorf("protocolVersion = %d, want %d", req.ProtocolVersion, tunnelproto.Version)
+	}
+}
+
+// The Advisor's reason for a refused request reaches the operator verbatim.
+func TestEnrollmentShowsTheAdvisorsReason(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "agent speaks protocol v9; this Advisor serves v1 to v1", http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	_, err := (&Enroller{BaseURL: srv.URL, HTTPClient: srv.Client()}).Enroll(context.Background(), "c", "n", "t")
+	if err == nil || !strings.Contains(err.Error(), "protocol v9") {
+		t.Errorf("err = %v, want the Advisor's reason", err)
 	}
 }

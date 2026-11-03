@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
 	"io"
 	"net/http"
 	"time"
@@ -64,10 +65,11 @@ func (e *Enroller) Enroll(ctx context.Context, clusterID, nodeID, token string) 
 	}
 
 	body, err := json.Marshal(EnrollRequest{
-		ClusterID:    clusterID,
-		CSR:          string(csr),
-		Fingerprint:  fp,
-		AgentVersion: e.AgentVersion,
+		ClusterID:       clusterID,
+		CSR:             string(csr),
+		Fingerprint:     fp,
+		AgentVersion:    e.AgentVersion,
+		ProtocolVersion: tunnelproto.Version,
 	})
 	if err != nil {
 		return nil, err

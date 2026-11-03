@@ -31,6 +31,11 @@ type Request struct {
 	Fingerprint string `json:"fingerprint"`
 
 	AgentVersion string `json:"agentVersion"`
+
+	// ProtocolVersion is the tunnel protocol this agent speaks, so the
+	// Advisor can refuse an incompatible agent by name (#216). Zero from
+	// agents that predate it.
+	ProtocolVersion int `json:"protocolVersion,omitempty"`
 }
 
 // Response is what the service returns on success.
