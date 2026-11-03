@@ -75,6 +75,12 @@ type Hello struct {
 	Fingerprint     string `json:"fingerprint"`     // agent identity, shown at enrollment verify
 	AgentVersion    string `json:"agentVersion"`    // release of the agent binary
 	ProtocolVersion int    `json:"protocolVersion"` // what this agent speaks
+
+	// ServedLevel and ServedConsent are what this node enforces, from its own
+	// files. Advisory to the SaaS: it narrows what it offers to them and never
+	// widens. Empty from agents that predate them.
+	ServedLevel   string `json:"servedLevel,omitempty"`
+	ServedConsent string `json:"servedConsent,omitempty"`
 }
 
 // HelloAck is the SaaS's response. Accepted=false carries an operator-readable

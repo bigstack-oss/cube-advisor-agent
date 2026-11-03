@@ -122,12 +122,7 @@ func runCmd(args []string) int {
 		go probeRunner.RunSweeper(ctx)
 	}
 
-	hello := tunnelproto.Hello{
-		ClusterID:       id.ClusterID,
-		Fingerprint:     fp,
-		AgentVersion:    version,
-		ProtocolVersion: tunnelproto.Version,
-	}
+	hello := helloFor(id.ClusterID, fp, reg)
 	url := "wss://" + serverAddr + tunnel.WSPath
 	httpClient := tunnel.NewTLSClient(tlsCfg)
 	connect := func(ctx context.Context) (*tunnel.Session, error) {
@@ -218,4 +213,17 @@ func resolveServerAddr(explicit, dir string) (string, error) {
 		return "", fmt.Errorf("no tunnel address: enrol first, or pass -server host:port")
 	}
 	return persisted, nil
+}
+
+// helloFor builds the opening frame, naming the level and consent this node
+// serves (#232).
+func helloFor(clusterID, fingerprint string, reg *toolplane.Registry) tunnelproto.Hello {
+	return tunnelproto.Hello{
+		ClusterID:       clusterID,
+		Fingerprint:     fingerprint,
+		AgentVersion:    version,
+		ProtocolVersion: tunnelproto.Version,
+		ServedLevel:     reg.Level().String(),
+		ServedConsent:   reg.Consent().String(),
+	}
 }

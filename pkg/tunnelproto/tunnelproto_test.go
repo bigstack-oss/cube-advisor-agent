@@ -200,3 +200,21 @@ func TestAgentDrivenOmittedWhenFalse(t *testing.T) {
 		t.Errorf("a human console open carries agentDriven: %s", b)
 	}
 }
+
+// The served fields are additive: an older agent omits them and an older SaaS
+// ignores them, so the wire names are the contract.
+func TestHelloServedFieldsWireNames(t *testing.T) {
+	b, err := json.Marshal(Hello{ClusterID: "c", ServedLevel: "observe", ServedConsent: "always"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"servedLevel":"observe"`, `"servedConsent":"always"`} {
+		if !contains(string(b), want) {
+			t.Errorf("hello %s missing %s", b, want)
+		}
+	}
+	b, _ = json.Marshal(Hello{ClusterID: "c"})
+	if contains(string(b), "served") {
+		t.Errorf("unset served fields must be omitted: %s", b)
+	}
+}
