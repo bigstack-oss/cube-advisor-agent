@@ -495,10 +495,12 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 
 	var argv []string
 	var err error
+	var callID string
 	if tool.Sandbox {
 		var command string
 		if command, err = sandboxCommand(args); err == nil {
-			argv = SandboxArgv(command, r.timeoutFor(tool))
+			callID = newCallID()
+			argv = SandboxArgvFor(command, r.timeoutFor(tool), callID)
 		}
 	} else {
 		argv, err = tool.resolve(args)
@@ -531,6 +533,9 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 		out = trimPartialRune(truncateAtRune(out, max))
 		out = append(out, fmt.Sprintf(truncationNotice, len(out))...)
 		runErr = nil
+	}
+	if callID != "" {
+		args = withCall(args, callID)
 	}
 	rec := ToolCall{
 		Tool: name, Args: args, Argv: argv, Allowed: true,

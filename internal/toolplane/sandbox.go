@@ -1,6 +1,8 @@
 package toolplane
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -38,6 +40,20 @@ var sandboxKeyrings = []string{"/var/lib/ceph/*/*keyring", "/var/lib/ceph/*/*/*k
 // setuid ignored, and credentials and control sockets hidden. No network because CubeCOS runs Ceph with cephx off, so any
 // networked read could also write; network reads are declared tools.
 func SandboxArgv(command string, timeout time.Duration) []string {
+	return SandboxArgvFor(command, timeout, "")
+}
+
+// SandboxBrokerDir is the broker directory bound into the sandbox (ADR 0019);
+// empty means no brokers.
+var SandboxBrokerDir string
+
+// sandboxScratch are throwaway, memory-backed writable directories: tools may
+// write lock files and scratch there, and the host never sees it.
+var sandboxScratch = []string{"/run", "/var/support"}
+
+// SandboxArgvFor is SandboxArgv with the run's id, passed to the brokers so
+// their audit records name the run that called them.
+func SandboxArgvFor(command string, timeout time.Duration, callID string) []string {
 	props := []string{
 		"ProtectSystem=strict",
 		"ProtectHome=read-only",
@@ -60,6 +76,20 @@ func SandboxArgv(command string, timeout time.Duration) []string {
 		// No network here, so make the ceph CLI give up in seconds.
 		`Environment="CEPH_ARGS=--client_mount_timeout=3"`,
 		fmt.Sprintf("RuntimeMaxSec=%d", int(timeout.Seconds())),
+	}
+	for _, d := range sandboxScratch {
+		props = append(props, "TemporaryFileSystem="+d)
+	}
+	// A memory-only journal lives under /run/log; keep it readable.
+	props = append(props, "BindReadOnlyPaths=-/run/log")
+	path := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+	if SandboxBrokerDir != "" {
+		props = append(props, "BindReadOnlyPaths="+SandboxBrokerDir)
+		path = SandboxBrokerDir + "/bin:" + path
+	}
+	props = append(props, "Environment=PATH="+path)
+	if callID != "" {
+		props = append(props, "Environment=ADVISOR_CALL_ID="+callID)
 	}
 	hidden := append([]string(nil), sandboxHidden...)
 	for _, g := range sandboxKeyrings {
@@ -104,4 +134,21 @@ func sandboxCommand(args map[string]string) (string, error) {
 		return "", errors.New("command must be valid text")
 	}
 	return cmd, nil
+}
+
+// newCallID names one sandbox run, so broker audit records can point at it.
+func newCallID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// withCall copies args with the run's id added under "call".
+func withCall(args map[string]string, id string) map[string]string {
+	out := make(map[string]string, len(args)+1)
+	for k, v := range args {
+		out[k] = v
+	}
+	out["call"] = id
+	return out
 }

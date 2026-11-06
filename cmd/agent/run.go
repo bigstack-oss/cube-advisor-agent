@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bigstack-oss/cube-advisor-agent/internal/agent"
+	"github.com/bigstack-oss/cube-advisor-agent/internal/broker"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/console"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
@@ -80,6 +81,16 @@ func runCmd(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: audit log: %v\n", err)
 		return exitFailed
+	}
+	// Read brokers for the sandbox (ADR 0019). A node where they can't start
+	// still serves; its sandbox just has no data sources.
+	brk := &broker.Server{Dir: broker.DefaultDir, Prometheus: broker.DefaultPrometheus, Audit: auditor,
+		CephTable: broker.LocalCephTable, CephRun: broker.LocalCephRun}
+	if err := brk.Start(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "run: brokers not started: %v\n", err)
+	} else {
+		toolplane.SandboxBrokerDir = broker.DefaultDir
+		servedBrokers = []string{"prom", "ceph-ro"}
 	}
 	var opts []toolplane.Option
 	var probeRunner *toolplane.ProbeRunner
@@ -225,5 +236,9 @@ func helloFor(clusterID, fingerprint string, reg *toolplane.Registry) tunnelprot
 		ProtocolVersion: tunnelproto.Version,
 		ServedLevel:     reg.Level().String(),
 		ServedConsent:   reg.Consent().String(),
+		Brokers:         servedBrokers,
 	}
 }
+
+// servedBrokers is set once the brokers are serving.
+var servedBrokers []string

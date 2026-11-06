@@ -81,6 +81,10 @@ type Hello struct {
 	// widens. Empty from agents that predate them.
 	ServedLevel   string `json:"servedLevel,omitempty"`
 	ServedConsent string `json:"servedConsent,omitempty"`
+
+	// Brokers names the read brokers the sandbox can call (ADR 0019), e.g.
+	// ["prom", "ceph-ro"]; empty from an agent without them.
+	Brokers []string `json:"brokers,omitempty"`
 }
 
 // HelloAck is the SaaS's response. Accepted=false carries an operator-readable

@@ -105,3 +105,23 @@ func TestSandboxHidesKeyringsButNotOSDDirs(t *testing.T) {
 		t.Error("the ceph CLI is not told to give up quickly")
 	}
 }
+
+func TestSandboxBindsBrokersAndThrowawayScratch(t *testing.T) {
+	old := SandboxBrokerDir
+	SandboxBrokerDir = "/run/cube-advisor-agent/broker"
+	t.Cleanup(func() { SandboxBrokerDir = old })
+	argv := strings.Join(SandboxArgvFor("prom query up", time.Minute, "abc"), " ")
+	for _, want := range []string{
+		"TemporaryFileSystem=/run", "TemporaryFileSystem=/var/support", "BindReadOnlyPaths=-/run/log",
+		"BindReadOnlyPaths=/run/cube-advisor-agent/broker",
+		"Environment=PATH=/run/cube-advisor-agent/broker/bin:", "Environment=ADVISOR_CALL_ID=abc",
+		"PrivateNetwork=yes",
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("sandbox lacks %s", want)
+		}
+	}
+	if strings.Contains(argv, "TemporaryFileSystem=/var/log") {
+		t.Error("/var/log must stay the real, read-only logs")
+	}
+}
