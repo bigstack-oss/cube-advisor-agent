@@ -125,12 +125,18 @@ const (
 	// OpenStack, Kubernetes and DNS all accept it as a name, so a value this
 	// shape admits is one every layer downstream can hold.
 	ShapeDNSLabel Shape = iota + 1
+	// ShapeCephPGID is a Ceph placement-group id, "<pool>.<hex>" (25.d7).
+	// Its one "." sits between digits and hex, so it cannot form a path
+	// segment; the value is only ever an argv element.
+	ShapeCephPGID
 )
 
 func (s Shape) String() string {
 	switch s {
 	case ShapeDNSLabel:
 		return "dns-label"
+	case ShapeCephPGID:
+		return "ceph-pgid"
 	}
 	return fmt.Sprintf("shape(%d)", int(s))
 }
@@ -161,6 +167,22 @@ func (s Shape) admits(v string) bool {
 			case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
 			case c == '-' && i > 0 && i < len(v)-1:
 			default:
+				return false
+			}
+		}
+		return true
+	case ShapeCephPGID:
+		pool, seed, ok := strings.Cut(v, ".")
+		if !ok || len(pool) == 0 || len(pool) > 5 || len(seed) == 0 || len(seed) > 8 {
+			return false
+		}
+		for i := 0; i < len(pool); i++ {
+			if pool[i] < '0' || pool[i] > '9' {
+				return false
+			}
+		}
+		for i := 0; i < len(seed); i++ {
+			if c := seed[i]; !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
 				return false
 			}
 		}
@@ -321,6 +343,10 @@ type Tool struct {
 	//
 	// Exactly one of Argv, Get, Post, Catalog or Control is set.
 	Post string
+	// Sandbox marks ADR 0018's read shell: the caller's command text runs in
+	// SandboxArgv's read-only sandbox. The only tool kind that takes free text;
+	// the sandbox, not the text, is what makes it a read.
+	Sandbox bool
 
 	// Catalog is a finite set of cube-cos-api GET paths this one tool may
 	// fetch: the value the caller supplies, mapped to the path template it
@@ -429,13 +455,19 @@ var CubeCOSReads = map[string]string{
 	"images":                  "/api/v1/datacenters/{dc}/images",
 	"images/materials":        "/api/v1/datacenters/{dc}/images/materials",
 	"metrics":                 "/api/v1/datacenters/{dc}/metrics",
-	"nodes":                   "/api/v1/datacenters/{dc}/nodes",
-	"services":                "/api/v1/datacenters/{dc}/services",
-	"triggers":                "/api/v1/datacenters/{dc}/triggers",
-	"triggers/materials":      "/api/v1/datacenters/{dc}/triggers/materials",
-	"tunings/parameters":      "/api/v1/datacenters/{dc}/tunings/parameters",
-	"tunings/specs":           "/api/v1/datacenters/{dc}/tunings/specs",
-	"volumes":                 "/api/v1/datacenters/{dc}/volumes",
+	// Top-N rankings ("what uses the most memory"); the path's metric, view
+	// and entity are fixed here, so they take no parameter.
+	"metrics/cpuUsage/rank/hosts":    "/api/v1/datacenters/{dc}/metrics/cpuUsage/rank/hosts",
+	"metrics/cpuUsage/rank/vms":      "/api/v1/datacenters/{dc}/metrics/cpuUsage/rank/vms",
+	"metrics/memoryUsage/rank/hosts": "/api/v1/datacenters/{dc}/metrics/memoryUsage/rank/hosts",
+	"metrics/memoryUsage/rank/vms":   "/api/v1/datacenters/{dc}/metrics/memoryUsage/rank/vms",
+	"nodes":                          "/api/v1/datacenters/{dc}/nodes",
+	"services":                       "/api/v1/datacenters/{dc}/services",
+	"triggers":                       "/api/v1/datacenters/{dc}/triggers",
+	"triggers/materials":             "/api/v1/datacenters/{dc}/triggers/materials",
+	"tunings/parameters":             "/api/v1/datacenters/{dc}/tunings/parameters",
+	"tunings/specs":                  "/api/v1/datacenters/{dc}/tunings/specs",
+	"volumes":                        "/api/v1/datacenters/{dc}/volumes",
 }
 
 // cubeCOSReadsHeldBack is every other zero-parameter GET cube-cos-api declares,
@@ -546,6 +578,103 @@ var Allowlist = []Tool{
 		// journalctl over a bounded line count is quick; a tail that takes
 		// longer than this is a node problem the timeout should surface.
 		Timeout: 30 * time.Second,
+	},
+	// Network reads the sandbox cannot make (it has no network), fixed argv.
+	{
+		Name:           "ceph_status",
+		Description:    "Ceph cluster status as JSON: health, OSD up/in, PG states, recovery rate, misplaced and degraded objects.",
+		Argv:           []string{"ceph", "-s", "-f", "json"},
+		Impact:         ImpactRead,
+		MaxOutputBytes: 64 << 10,
+		Timeout:        30 * time.Second,
+	},
+	{
+		Name:           "ceph_osd_df",
+		Description:    "Per-OSD CRUSH weight, reweight, utilisation, PG count and status as JSON.",
+		Argv:           []string{"ceph", "osd", "df", "-f", "json"},
+		Impact:         ImpactRead,
+		MaxOutputBytes: 128 << 10,
+		Timeout:        30 * time.Second,
+	},
+	{
+		Name:        "hex_sdk_log",
+		Description: "Last lines CubeCOS's hex_sdk logged to the journal: background job attempts, verdicts and warnings.",
+		Argv:        []string{"journalctl", "-t", "hex_sdk", "-n", "{lines}", "--no-pager", "-o", "short-iso"},
+		Params: map[string][]string{
+			"{lines}": {"50", "200", "1000"},
+		},
+		Impact:         ImpactRead,
+		MaxOutputBytes: 256 << 10,
+		Timeout:        30 * time.Second,
+	},
+	{
+		Name:           "ceph_health_detail",
+		Description:    "Ceph health checks with detail as JSON: every warning and error and the PGs and OSDs it names.",
+		Argv:           []string{"ceph", "health", "detail", "-f", "json"},
+		Impact:         ImpactRead,
+		MaxOutputBytes: 128 << 10,
+		Timeout:        30 * time.Second,
+	},
+	{
+		Name:           "ceph_osd_tree",
+		Description:    "Ceph CRUSH tree as JSON: hosts, OSDs, class, weight, up/down and reweight, including OSDs outside the tree.",
+		Argv:           []string{"ceph", "osd", "tree", "-f", "json"},
+		Impact:         ImpactRead,
+		MaxOutputBytes: 128 << 10,
+		Timeout:        30 * time.Second,
+	},
+	{
+		Name:           "ceph_osd_dump",
+		Description:    "Ceph OSD map as JSON: each OSD's uuid, up/in, up_from/down_at and state; each pool's size, min_size and rule.",
+		Argv:           []string{"ceph", "osd", "dump", "-f", "json"},
+		Impact:         ImpactRead,
+		MaxOutputBytes: 512 << 10,
+		Timeout:        30 * time.Second,
+	},
+	{
+		Name:           "ceph_pg_query",
+		Description:    "One placement group's state as JSON: up/acting sets, recovery state, might_have_unfound and the OSDs it would probe.",
+		Argv:           []string{"ceph", "pg", "{pgid}", "query", "-f", "json"},
+		Free:           map[string]Shape{"{pgid}": ShapeCephPGID},
+		Impact:         ImpactRead,
+		MaxOutputBytes: 512 << 10,
+		Timeout:        30 * time.Second,
+	},
+	{
+		Name:           "ceph_pg_list_unfound",
+		Description:    "The unfound objects in one placement group as JSON.",
+		Argv:           []string{"ceph", "pg", "{pgid}", "list_unfound", "-f", "json"},
+		Free:           map[string]Shape{"{pgid}": ShapeCephPGID},
+		Impact:         ImpactRead,
+		MaxOutputBytes: 256 << 10,
+		Timeout:        30 * time.Second,
+	},
+	// ADR 0018's read shell: any command, run in the read-only sandbox.
+	{
+		Name:           "shell_read",
+		Description:    "Run a command in the read-only sandbox; anything that changes the system fails.",
+		Sandbox:        true,
+		Impact:         ImpactRead,
+		MaxOutputBytes: 64 << 10,
+		Timeout:        60 * time.Second,
+	},
+	// Host processes ranked by memory or CPU. Fixed argv, no arguments; comm
+	// (the name) and never args, which can carry credentials.
+	{
+		Name:           "process_memory_top",
+		Description:    "Host processes on this node by resident memory, largest first.",
+		Argv:           []string{"ps", "-eo", "pid,user,rss,pmem,pcpu,comm", "--sort=-rss"},
+		Impact:         ImpactRead,
+		MaxOutputBytes: 16 << 10,
+		Timeout:        10 * time.Second,
+	},
+	{
+		Name:           "process_cpu_top",
+		Description:    "Host processes on this node by CPU use, busiest first.",
+		Argv:           []string{"ps", "-eo", "pid,user,pcpu,pmem,rss,comm", "--sort=-pcpu"},
+		Impact:         ImpactRead,
+		MaxOutputBytes: 16 << 10,
+		Timeout:        10 * time.Second,
 	},
 	// cube-cos-api reads. GET only, structurally — the resolved path is the
 	// whole request, and {dc} is filled by the executor, so the SaaS chooses
@@ -745,13 +874,13 @@ func (t Tool) validate(probes bool) error {
 		return fmt.Errorf("tool %q has a negative timeout", t.Name)
 	}
 	kinds := 0
-	for _, set := range []bool{len(t.Argv) > 0, t.Get != "", t.Post != "", len(t.Catalog) > 0, t.Control != 0} {
+	for _, set := range []bool{len(t.Argv) > 0, t.Get != "", t.Post != "", len(t.Catalog) > 0, t.Control != 0, t.Sandbox} {
 		if set {
 			kinds++
 		}
 	}
 	if kinds != 1 {
-		return fmt.Errorf("tool %q must be exactly one of a command (Argv), a cube-cos-api read (Get), a cube-cos-api catalogue read (Catalog), a cube-cos-api write (Post) or a probe-plane control (Control)", t.Name)
+		return fmt.Errorf("tool %q must be exactly one of a command (Argv), a cube-cos-api read (Get), a cube-cos-api catalogue read (Catalog), a cube-cos-api write (Post), a probe-plane control (Control) or a sandboxed read (Sandbox)", t.Name)
 	}
 	// A placeholder is either enumerated or shaped, never both: two answers to
 	// "what may this value be" is the same as none.
@@ -766,13 +895,14 @@ func (t Tool) validate(probes bool) error {
 			return fmt.Errorf("tool %q declares %s with a shape this build does not know", t.Name, ph)
 		}
 	}
-	// A read may be shaped too, but nothing needs it yet, and a free parameter
-	// on a read is a widening nobody asked for. Refused until a tool wants it,
-	// so the surface grows deliberately rather than by inheritance.
-	if len(t.Free) > 0 && t.Post == "" {
-		return fmt.Errorf("tool %q declares free parameters but is not a write; only a write path admits an unenumerable value today", t.Name)
+	// A shaped value may fill a write path or a command's argv (an exec
+	// element, never a path); other reads stay enumerated.
+	if len(t.Free) > 0 && t.Post == "" && len(t.Argv) == 0 {
+		return fmt.Errorf("tool %q declares free parameters but is neither a write nor a command; only those admit an unenumerable value", t.Name)
 	}
 	switch {
+	case t.Sandbox:
+		return t.validateSandbox()
 	case t.Control != 0:
 		return t.validateControl()
 	case t.Get != "":

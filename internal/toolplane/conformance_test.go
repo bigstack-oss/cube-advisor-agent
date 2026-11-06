@@ -242,12 +242,35 @@ func TestEveryCatalogueReadIsAGetTheAPIServes(t *testing.T) {
 	for _, tool := range Allowlist {
 		for key, path := range tool.Catalog {
 			spec := specName(BackendCubeCOS, path)
-			if !gets[spec] {
+			if !gets[spec] && !servesInstance(gets, spec) {
 				t.Errorf("%s catalogue key %q names %s, which cube-cos-api does not serve by GET",
 					tool.Name, key, path)
 			}
 		}
 	}
+}
+
+// servesInstance reports whether path fills the {param} segments of a GET the
+// API declares with fixed values (a ranking's metric, view and entity).
+func servesInstance(gets map[string]bool, path string) bool {
+	want := strings.Split(path, "/")
+	for spec := range gets {
+		got := strings.Split(spec, "/")
+		if len(got) != len(want) || !strings.Contains(spec, "{") {
+			continue
+		}
+		match := true
+		for i := range got {
+			if got[i] != want[i] && !(strings.HasPrefix(got[i], "{") && !strings.HasPrefix(want[i], "{")) {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 // TestEverySimpleGetIsAdmittedOrHeldBack is what makes admission opt-in and
@@ -362,6 +385,24 @@ func TestEveryExcludedPathIsStillInTheAllowlist(t *testing.T) {
 	for path := range notInTheSpec {
 		if !declared[path] {
 			t.Errorf("notInTheSpec lists %s, which no tool declares; delete the entry", path)
+		}
+	}
+}
+
+// The instance match must not admit a path the API does not declare.
+func TestServesInstanceRejectsUndeclaredPaths(t *testing.T) {
+	gets := map[string]bool{"/api/v1/datacenters/{dataCenter}/metrics/{metricType}/{viewType}/{entityType}": true}
+	ok := "/api/v1/datacenters/{dataCenter}/metrics/memoryUsage/rank/vms"
+	if !servesInstance(gets, ok) {
+		t.Errorf("%s fills the declared template and was refused", ok)
+	}
+	for _, bad := range []string{
+		"/api/v1/datacenters/{dataCenter}/metrics/memoryUsage/rank",
+		"/api/v1/datacenters/{dataCenter}/settings/memoryUsage/rank/vms",
+		"/api/v1/datacenters/{dataCenter}/metrics/memoryUsage/rank/vms/x",
+	} {
+		if servesInstance(gets, bad) {
+			t.Errorf("%s is not declared and was admitted", bad)
 		}
 	}
 }

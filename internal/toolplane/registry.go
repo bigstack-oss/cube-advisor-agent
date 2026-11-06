@@ -493,7 +493,17 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 		return r.callPost(ctx, tool, args)
 	}
 
-	argv, err := tool.resolve(args)
+	var argv []string
+	var err error
+	if tool.Sandbox {
+		var command string
+		if command, err = sandboxCommand(args); err == nil {
+			argv = SandboxArgv(command, r.timeoutFor(tool))
+		}
+	} else {
+		argv, err = tool.resolve(args)
+	}
+
 	if err != nil {
 		r.audit.RecordToolCall(ToolCall{
 			Tool: name, Args: args, Allowed: false,
@@ -531,6 +541,12 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 		rec.Reason = runErr.Error()
 	}
 	r.audit.RecordToolCall(rec)
+	// A sandboxed command's own failure is its result: the person or model
+	// chose the command, so its exit status and output are the answer.
+	if tool.Sandbox && runErr != nil {
+		out = append(out, fmt.Sprintf("\n[%v]\n", runErr)...)
+		runErr = nil
+	}
 	return out, runErr
 }
 
@@ -810,7 +826,9 @@ func trimPartialRune(b []byte) []byte {
 // no escaping: metacharacters are ordinary bytes in an exec argument.
 func (t Tool) resolve(args map[string]string) ([]string, error) {
 	for k := range args {
-		if _, ok := t.Params[k]; !ok {
+		_, enumerated := t.Params[k]
+		_, shaped := t.Free[k]
+		if !enumerated && !shaped {
 			return nil, fmt.Errorf("unexpected argument %q", k)
 		}
 	}
@@ -824,7 +842,11 @@ func (t Tool) resolve(args map[string]string) ([]string, error) {
 		if !given {
 			return nil, fmt.Errorf("missing argument %s", a)
 		}
-		if !permitted(t.Params[a], v) {
+		if shape, ok := t.Free[a]; ok {
+			if !shape.admits(v) {
+				return nil, fmt.Errorf("value for %s is not a %s", a, shape)
+			}
+		} else if !permitted(t.Params[a], v) {
 			// The value is not echoed: an error that repeats what was asked for
 			// makes a convenient oracle out of the audit log.
 			return nil, fmt.Errorf("value for %s is not in the permitted set", a)
