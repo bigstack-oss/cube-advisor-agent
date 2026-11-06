@@ -117,22 +117,29 @@ func consentCaveat(c toolplane.Consent) string {
 // cubeCOSAccess is where this node's cube-cos-api is and what to call the
 // cluster when asking it (ADR 0016, slice 4).
 //
-// Absent is the ordinary state and not an error: the read catalogue's 21 paths
-// refuse, naming the file that would enable them. Enrolling an agent and
-// granting it the cluster's own inventory are separate decisions, so this one
-// is made by writing a file rather than by enrolling.
+// The file is an operator override. Absent, access is derived from the node's
+// settings file; if that fails too, the catalogue reads refuse.
 //
 // The client is built here rather than inside toolplane because the base URL
 // and the node token are its own: the getter interface exists precisely so
 // neither reaches the package that writes the audit log.
+// cubeCOSSettingsPath is a var so tests can point it at a fixture.
+var cubeCOSSettingsPath = toolplane.SettingsPath
+
 var cubeCOSAccess = setting{
 	name: "cube-cos-api access",
 	file: toolplane.CubeCOSFileName,
 	load: func(dir string) settingState {
 		access, err := toolplane.ReadCubeCOSAccess(dir)
+		source := ""
+		if errors.Is(err, toolplane.ErrNoCubeCOS) {
+			access, err = toolplane.DeriveCubeCOSAccess(cubeCOSSettingsPath)
+			if err != nil {
+				return settingState{line: fmt.Sprintf("cube-cos-api access: not configured and not derivable (%v); reads will refuse", err)}
+			}
+			source = " (derived from " + cubeCOSSettingsPath + ")"
+		}
 		switch {
-		case errors.Is(err, toolplane.ErrNoCubeCOS):
-			return settingState{line: "cube-cos-api access: not configured; reads will refuse until it is"}
 		case err != nil:
 			return settingState{
 				broken: true,
@@ -147,7 +154,7 @@ var cubeCOSAccess = setting{
 			}
 		}
 		return settingState{
-			line: fmt.Sprintf("cube-cos-api access: datacenter %s at %s", access.Datacenter, access.BaseURL),
+			line: fmt.Sprintf("cube-cos-api access: datacenter %s at %s%s", access.Datacenter, access.BaseURL, source),
 			apply: func(r *toolplane.Registry) {
 				r.ConfigureCubeCOS(access.Datacenter, client)
 			},

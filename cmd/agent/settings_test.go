@@ -282,3 +282,26 @@ func writeSetting(t *testing.T, dir string, e effect) {
 // with: these tests and that command both want a registry and no audit log, so
 // they should not disagree about how to get one.
 func discardAuditor() toolplane.Auditor { return checkAuditor() }
+
+func TestCubeCOSAccessFallsBackToTheNodesSettings(t *testing.T) {
+	settings := filepath.Join(t.TempDir(), "settings.txt")
+	if err := os.WriteFile(settings, []byte("net.hostname = cube-r730\ncubesys.management = eth0\nnet.if.addr.eth0 = 10.32.1.210\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := cubeCOSSettingsPath
+	cubeCOSSettingsPath = settings
+	defer func() { cubeCOSSettingsPath = old }()
+
+	st := cubeCOSAccess.load(t.TempDir()) // no cube-cos-api.json
+	if st.broken || st.apply == nil {
+		t.Fatalf("no file and derivable settings should configure access: %+v", st)
+	}
+	if !strings.Contains(st.line, "cube-r730 at http://10.32.1.210:8082 (derived from") {
+		t.Errorf("line = %q", st.line)
+	}
+
+	cubeCOSSettingsPath = filepath.Join(t.TempDir(), "absent")
+	if st := cubeCOSAccess.load(t.TempDir()); st.broken || st.apply != nil {
+		t.Errorf("underivable settings should leave access off, not broken: %+v", st)
+	}
+}

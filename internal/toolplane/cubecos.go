@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
 
 // CubeCOSFileName is the file in the agent's own directory that says where this
@@ -125,4 +127,45 @@ func (r *Registry) Datacenter() string { return r.datacenter }
 // which is the argument executorFilled already makes for {flavor}.
 func errNoCubeCOSAccess() error {
 	return fmt.Errorf("cube-cos-api access is not configured on this agent; write %s to enable it", CubeCOSFileName)
+}
+
+// SettingsPath is the node's settings file DeriveCubeCOSAccess reads.
+const SettingsPath = "/etc/settings.txt"
+
+// cubeCOSPort is cube-cos-api's listen port; it serves plain HTTP on the
+// management address.
+const cubeCOSPort = "8082"
+
+var (
+	hostnameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*$`)
+	ipv4Re     = regexp.MustCompile(`^[0-9]{1,3}(\.[0-9]{1,3}){3}$`)
+)
+
+// DeriveCubeCOSAccess works out this node's cube-cos-api from the settings
+// file, the way cube-cos-api names itself: the hostname, or cubesys.controller
+// on an HA cluster, at the management interface's address.
+func DeriveCubeCOSAccess(settingsPath string) (CubeCOSAccess, error) {
+	b, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return CubeCOSAccess{}, fmt.Errorf("toolplane: read %s: %w", settingsPath, err)
+	}
+	kv := map[string]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if ok {
+			kv[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	dc := kv["net.hostname"]
+	if kv["cubesys.ha"] == "true" {
+		dc = kv["cubesys.controller"]
+	}
+	addr := kv["net.if.addr."+kv["cubesys.management"]]
+	if !hostnameRe.MatchString(dc) {
+		return CubeCOSAccess{}, fmt.Errorf("toolplane: %s names no usable datacenter (%q)", settingsPath, dc)
+	}
+	if !ipv4Re.MatchString(addr) {
+		return CubeCOSAccess{}, fmt.Errorf("toolplane: %s has no management address for %q", settingsPath, kv["cubesys.management"])
+	}
+	return CubeCOSAccess{Datacenter: dc, BaseURL: "http://" + addr + ":" + cubeCOSPort}, nil
 }

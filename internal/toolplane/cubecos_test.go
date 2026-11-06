@@ -156,3 +156,52 @@ func TestTheDatacenterPlaceholderNamesItsFile(t *testing.T) {
 		t.Errorf("executorFilled[%s] = %q, want %q", dcPlaceholder, got, CubeCOSFileName)
 	}
 }
+
+func writeSettings(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "settings.txt")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestCubeCOSAccessIsDerivedFromASingleNodesSettings(t *testing.T) {
+	p := writeSettings(t, "net.hostname = cube-r730\ncubesys.management = eth0\nnet.if.addr.eth0 = 10.32.1.210\n")
+	got, err := DeriveCubeCOSAccess(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := CubeCOSAccess{Datacenter: "cube-r730", BaseURL: "http://10.32.1.210:8082"}
+	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestAnHAClusterIsNamedByItsController(t *testing.T) {
+	p := writeSettings(t, "net.hostname = sky141\ncubesys.ha = true\ncubesys.controller = sky\n"+
+		"cubesys.management = bond0.10\nnet.if.addr.bond0.10 = 10.32.10.141\n")
+	got, err := DeriveCubeCOSAccess(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Datacenter != "sky" || got.BaseURL != "http://10.32.10.141:8082" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestDerivationRefusesWhatItCannotTell(t *testing.T) {
+	for name, body := range map[string]string{
+		"no management address": "net.hostname = n1\ncubesys.management = eth0\n",
+		"HA without controller": "net.hostname = n1\ncubesys.ha = true\ncubesys.management = eth0\nnet.if.addr.eth0 = 10.0.0.1\n",
+		"not a host name":       "net.hostname = bad/name\ncubesys.management = eth0\nnet.if.addr.eth0 = 10.0.0.1\n",
+		"not an address":        "net.hostname = n1\ncubesys.management = eth0\nnet.if.addr.eth0 = x@y\n",
+	} {
+		if _, err := DeriveCubeCOSAccess(writeSettings(t, body)); err == nil {
+			t.Errorf("%s: derived access from %q", name, body)
+		}
+	}
+	if _, err := DeriveCubeCOSAccess(filepath.Join(t.TempDir(), "absent")); err == nil {
+		t.Error("derived access with no settings file")
+	}
+}
