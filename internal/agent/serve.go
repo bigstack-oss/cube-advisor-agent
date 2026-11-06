@@ -134,13 +134,10 @@ func (s *Server) handle(ctx context.Context, ch *tunnel.Channel) {
 // never sent: a SaaS that could tell them apart could map the cluster by
 // asking for names and watching which answer differently.
 func (s *Server) serveConsole(ctx context.Context, ch *tunnel.Channel) {
-	// The shell tool (ADR 0017): serve it only at internal, judged from this
-	// agent's own level, never from what the SaaS sent. A human console has no
-	// mark and is unaffected. Generic refusal; the detail stays in the log.
-	if ch.Open.AgentDriven && s.Tools.Level() != toolplane.LevelInternal {
-		log.Printf("agent: agent-driven console refused, action level is %s not internal", s.Tools.Level())
-		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
-		return
+	// The shell tool is served at every level (ADR 0019): an admin approves
+	// its risky commands in the SaaS, and the session is recorded there.
+	if ch.Open.AgentDriven {
+		log.Printf("agent: agent-driven console at action level %s", s.Tools.Level())
 	}
 	switch ch.Open.Target.Kind {
 	case tunnelproto.TargetSSH:
