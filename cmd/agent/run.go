@@ -90,7 +90,7 @@ func runCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "run: brokers not started: %v\n", err)
 	} else {
 		toolplane.SandboxBrokerDir = broker.DefaultDir
-		servedBrokers = []string{"prom", "ceph-ro"}
+		servedBrokers = []string{"prom", "ceph-ro", "host-ro"}
 	}
 	var opts []toolplane.Option
 	var probeRunner *toolplane.ProbeRunner

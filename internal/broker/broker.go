@@ -47,7 +47,9 @@ type Server struct {
 	// CephTable returns Ceph's command table; CephRun runs `ceph args...`.
 	CephTable func(ctx context.Context) ([]CephCommand, error)
 	CephRun   func(ctx context.Context, args []string) (stdout, stderr []byte, err error)
-	Client    *http.Client
+	// HostRun runs the host broker's fixed commands; nil means LocalHostRun.
+	HostRun func(ctx context.Context, name string, args []string) (stdout, stderr []byte, err error)
+	Client  *http.Client
 
 	mu      sync.Mutex
 	table   []CephCommand
@@ -66,7 +68,8 @@ func (s *Server) Start(ctx context.Context) error {
 			return err
 		}
 	}
-	for name, h := range map[string]http.Handler{"prom.sock": http.HandlerFunc(s.prom), "ceph.sock": http.HandlerFunc(s.ceph)} {
+	for name, h := range map[string]http.Handler{"prom.sock": http.HandlerFunc(s.prom), "ceph.sock": http.HandlerFunc(s.ceph),
+		"host.sock": http.HandlerFunc(s.host)} {
 		path := filepath.Join(s.Dir, name)
 		_ = os.Remove(path)
 		l, err := net.Listen("unix", path)
@@ -283,5 +286,17 @@ H="` + CallHeader + `: ${ADVISOR_CALL_ID:-}"
 python3 -c 'import json,sys; print(json.dumps({"args": sys.argv[1:]}))' "$@" |
   curl -sS --unix-socket "$S" -H "$H" -H 'Content-Type: application/json' --data-binary @- http://broker/run
 `
-	return map[string]string{"prom": prom, "ceph-ro": ceph}
+	host := `#!/bin/sh
+# host-ro: the host's state the sandbox cannot see (ADR 0019).
+#   host-ro sockets [PORT]  listening TCP/UDP sockets on the host, optionally one local port
+#   host-ro unit NAME       a systemd unit's state, e.g. host-ro unit sshd
+S=` + dir + `/host.sock
+H="` + CallHeader + `: ${ADVISOR_CALL_ID:-}"
+case "$1" in
+  sockets) curl -sS --unix-socket "$S" -H "$H" -G http://broker/sockets ${2:+--data-urlencode "port=$2"} ;;
+  unit) curl -sS --unix-socket "$S" -H "$H" -G http://broker/unit --data-urlencode "name=$2" ;;
+  *) sed -n '2,4p' "$0" >&2; exit 2 ;;
+esac
+`
+	return map[string]string{"prom": prom, "ceph-ro": ceph, "host-ro": host}
 }

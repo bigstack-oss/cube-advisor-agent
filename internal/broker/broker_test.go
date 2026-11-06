@@ -75,7 +75,7 @@ func (a *memAudit) RecordToolCall(c toolplane.ToolCall) {
 	a.calls = append(a.calls, c)
 }
 
-func start(t *testing.T, prom http.Handler) (*Server, *memAudit, string) {
+func start(t *testing.T, prom http.Handler, opts ...func(*Server)) (*Server, *memAudit, string) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "brk") // short: Unix socket paths are limited
 	if err != nil {
@@ -92,6 +92,9 @@ func start(t *testing.T, prom http.Handler) (*Server, *memAudit, string) {
 			ran = append(ran, args)
 			return []byte(`{"ran":"` + strings.Join(args, " ") + `"}`), nil, nil
 		}}
+	for _, o := range opts {
+		o(s)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := s.Start(ctx); err != nil {
