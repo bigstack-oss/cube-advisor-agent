@@ -169,3 +169,7 @@ func DeriveCubeCOSAccess(settingsPath string) (CubeCOSAccess, error) {
 	}
 	return CubeCOSAccess{Datacenter: dc, BaseURL: "http://" + addr + ":" + cubeCOSPort}, nil
 }
+
+// EveryMinuteJobsPath is CubeCOS's every-minute job file (sdk_util.sh
+// CRON_EVERY_MINUTE_JOBS), the same on 3.1.10 and 3.2.0.
+const EveryMinuteJobsPath = "/etc/cube/cos/cron/every_minute_jobs.sh"

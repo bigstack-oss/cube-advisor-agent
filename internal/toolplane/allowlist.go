@@ -608,6 +608,17 @@ var Allowlist = []Tool{
 		Timeout:        30 * time.Second,
 	},
 	{
+		// CubeCOS's every-minute job file: background jobs still queued, e.g.
+		// a safe disk removal's next attempt. find, so a missing file is empty.
+		Name:        "every_minute_jobs",
+		Description: "CubeCOS's queued every-minute background jobs (/etc/cube/cos/cron/every_minute_jobs.sh); empty when none.",
+		Argv: []string{"find", "/etc/cube/cos", "-maxdepth", "2", "-path", EveryMinuteJobsPath,
+			"-type", "f", "-exec", "cat", "{}", "+"},
+		Impact:         ImpactRead,
+		MaxOutputBytes: 64 << 10,
+		Timeout:        10 * time.Second,
+	},
+	{
 		Name:           "ceph_health_detail",
 		Description:    "Ceph health checks with detail as JSON: every warning and error and the PGs and OSDs it names.",
 		Argv:           []string{"ceph", "health", "detail", "-f", "json"},
