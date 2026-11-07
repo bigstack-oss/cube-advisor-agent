@@ -1,5 +1,13 @@
-// Package console serves the human plane on the agent side: a console channel
-// is piped to the node's own sshd and to nothing else.
+// Package console serves the recorded console plane on the agent side: a
+// console channel is piped to the node's own sshd and to nothing else.
+//
+// Two kinds of channel arrive here, and both are served the same way: a
+// person's interactive console, and an agent-driven one the SaaS opens to run
+// one shell-tool command (ADR 0017), marked AgentDriven on the channel open.
+// Since ADR 0019 the agent serves the marked channel at every action level:
+// the SaaS grades the command, an admin approves it, and the session is
+// recorded there, under a certificate whose key ID names the agent and the
+// person.
 //
 // The agent never forks a PTY, never spawns a shell and never authenticates an
 // end user (ADR 0002). It moves bytes between the tunnel and a local TCP
