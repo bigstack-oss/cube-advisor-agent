@@ -109,6 +109,11 @@ type HelloAck struct {
 	// agent records it and does not act on it — updating what runs as root on
 	// a customer node is the customer's command to give (`advisor upgrade`).
 	CurrentRelease string `json:"currentRelease,omitempty"`
+
+	// ConsoleCA is the Advisor's console SSH CA, one authorized-keys line.
+	// Sent on every connect so a rotated CA reaches every node; the agent
+	// replaces the node's trusted copy only where console access was granted.
+	ConsoleCA string `json:"consoleCa,omitempty"`
 }
 
 // Negotiate decides whether to serve an agent's Hello.

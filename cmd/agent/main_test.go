@@ -371,11 +371,14 @@ func TestForceKeepsTheIdentityWhenEnrolmentFails(t *testing.T) {
 // installs it into sshd; an Advisor with no console leaves nothing behind.
 func TestEnrollRecordsTheConsoleCA(t *testing.T) {
 	dir := t.TempDir()
-	const line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtestkeytestkeytestkeytestkeytestkeytestk cube-advisor-console"
+	const line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEe4bv2j4FtzsksuvuL9LuAyISEvJt0YcT0Zr2iizt9Q cube-advisor-console"
 	srv := fakeEnrollServerFull(t, "observe", "always", line)
 	defer srv.Close()
 	if code := enrollCmd([]string{"-server", srv.URL, "-cluster", "c", "-dir", dir, "-token", "t"}); code != exitOK {
 		t.Fatalf("enrollCmd exit = %d", code)
+	}
+	if !identity.TakePeersPending(dir) {
+		t.Error("enrol did not mark the peers pending")
 	}
 	b, err := os.ReadFile(filepath.Join(dir, identity.ConsoleCAFileName))
 	if err != nil || string(b) != line+"\n" {

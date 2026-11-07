@@ -40,6 +40,8 @@ func runCmd(args []string) int {
 	_ = fs.Bool("probes", false, "ignored; kept so existing unit files still start")
 	webTargets := fs.String("web-targets", "/etc/cube-advisor-agent/web-targets.json",
 		"JSON map of symbolic web target names to host:port this node may proxy; absent means none")
+	consoleCA := fs.String("console-ca", identity.TrustedConsoleCAPath,
+		"console CA sshd trusts; replaced on rotation only if it already exists")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -180,6 +182,8 @@ func runCmd(args []string) int {
 		if err := identity.RecordCurrentRelease(*dir, sess.Ack().CurrentRelease); err != nil {
 			log.Printf("agent: could not record the current release: %v", err)
 		}
+		recordConsoleCA(*dir, *consoleCA, sess.Ack().ConsoleCA)
+		go enrollPeersOnce(ctx, *dir)
 		started := time.Now()
 		if err := srv.Serve(ctx, sess); err != nil {
 			log.Printf("agent: session ended: %v", err)
@@ -195,6 +199,25 @@ func runCmd(args []string) int {
 	}
 	log.Printf("agent: stopping")
 	return exitOK
+}
+
+// recordConsoleCA keeps this node's copy of the Advisor's console CA current
+// and, where console access was granted, the one sshd trusts. Never fatal.
+func recordConsoleCA(dir, trusted, line string) {
+	if line == "" {
+		return
+	}
+	if err := identity.RecordConsoleCA(dir, line); err != nil {
+		log.Printf("agent: could not record the console CA: %v", err)
+		return
+	}
+	changed, err := identity.RotateTrustedConsoleCA(trusted, line)
+	switch {
+	case err != nil:
+		log.Printf("agent: could not rotate the trusted console CA: %v", err)
+	case changed:
+		log.Printf("agent: the Advisor's console CA changed; %s now trusts the new one", trusted)
+	}
 }
 
 // resolveServerAddr picks the tunnel address to dial: an explicit -server

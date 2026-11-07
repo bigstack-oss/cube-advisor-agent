@@ -236,6 +236,10 @@ func enrollCmd(args []string) int {
 			fmt.Fprintf(os.Stderr, "enroll: enrolled, but could not record the console CA: %v\n", err)
 		}
 	}
+	// The first admitted connect enrols this node's peers.
+	if err := identity.MarkPeersPending(*dir); err != nil {
+		fmt.Fprintf(os.Stderr, "enroll: enrolled, but the other nodes will not follow: %v\n", err)
+	}
 	fmt.Printf("Fingerprint: %s\n", fp)
 	fmt.Printf("Compare this with the fingerprint shown by the Advisor before approving.\n")
 	return exitOK
@@ -260,6 +264,10 @@ func statusCmd(args []string) int {
 	}
 	fp, _ := id.Fingerprint()
 	fmt.Printf("Enrolled as %s, node %s\n", id.ClusterID, id.NodeID)
+	// The first admitted connect enrols this node's peers.
+	if err := identity.MarkPeersPending(*dir); err != nil {
+		fmt.Fprintf(os.Stderr, "enroll: enrolled, but the other nodes will not follow: %v\n", err)
+	}
 	fmt.Printf("Fingerprint: %s\n", fp)
 	return exitOK
 }
