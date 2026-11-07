@@ -51,7 +51,9 @@ type Server struct {
 	HostRun func(ctx context.Context, name string, args []string) (stdout, stderr []byte, err error)
 	// ProcRoot is where /procs reads processes; "" means /proc.
 	ProcRoot string
-	Client   *http.Client
+	// OpenStack backs os-ro; nil refuses its calls.
+	OpenStack OpenStackSource
+	Client    *http.Client
 
 	mu      sync.Mutex
 	table   []CephCommand
@@ -71,7 +73,7 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 	for name, h := range map[string]http.Handler{"prom.sock": http.HandlerFunc(s.prom), "ceph.sock": http.HandlerFunc(s.ceph),
-		"host.sock": http.HandlerFunc(s.host)} {
+		"host.sock": http.HandlerFunc(s.host), "os.sock": http.HandlerFunc(s.openstack)} {
 		path := filepath.Join(s.Dir, name)
 		_ = os.Remove(path)
 		l, err := net.Listen("unix", path)
@@ -304,5 +306,14 @@ case "$1" in
   *) sed -n '2,6p' "$0" >&2; exit 2 ;;
 esac
 `
-	return map[string]string{"prom": prom, "ceph-ro": ceph, "host-ro": host}
+	osro := `#!/bin/sh
+# os-ro: GET from the cluster's OpenStack APIs (ADR 0019).
+#   os-ro GET SERVICE PATH   SERVICE is a catalogue type, e.g.
+#   os-ro GET compute '/servers/detail?all_tenants=1&status=ERROR'
+S=` + dir + `/os.sock
+H="` + CallHeader + `: ${ADVISOR_CALL_ID:-}"
+[ $# -eq 3 ] || { sed -n '2,4p' "$0" >&2; exit 2; }
+curl -sS --max-time 90 --unix-socket "$S" -H "$H" -X "$1" -G http://broker/get --data-urlencode "service=$2" --data-urlencode "path=$3"
+`
+	return map[string]string{"prom": prom, "ceph-ro": ceph, "host-ro": host, "os-ro": osro}
 }

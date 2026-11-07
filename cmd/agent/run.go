@@ -15,6 +15,7 @@ import (
 	"github.com/bigstack-oss/cube-advisor-agent/internal/broker"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/console"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
+	"github.com/bigstack-oss/cube-advisor-agent/internal/openstack"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnel"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
@@ -86,11 +87,17 @@ func runCmd(args []string) int {
 	// still serves; its sandbox just has no data sources.
 	brk := &broker.Server{Dir: broker.DefaultDir, Prometheus: broker.DefaultPrometheus, Audit: auditor,
 		CephTable: broker.LocalCephTable, CephRun: broker.LocalCephRun}
+	if _, err := openstack.ReadOpenrc(openstack.OpenrcPath); err == nil {
+		brk.OpenStack = openstack.NewAdmin(openstack.OpenrcPath)
+	}
 	if err := brk.Start(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "run: brokers not started: %v\n", err)
 	} else {
 		toolplane.SandboxBrokerDir = broker.DefaultDir
 		servedBrokers = []string{"prom", "ceph-ro", "host-ro"}
+		if brk.OpenStack != nil {
+			servedBrokers = append(servedBrokers, "os-ro")
+		}
 	}
 	var opts []toolplane.Option
 	var probeRunner *toolplane.ProbeRunner
