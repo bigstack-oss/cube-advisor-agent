@@ -49,7 +49,9 @@ type Server struct {
 	CephRun   func(ctx context.Context, args []string) (stdout, stderr []byte, err error)
 	// HostRun runs the host broker's fixed commands; nil means LocalHostRun.
 	HostRun func(ctx context.Context, name string, args []string) (stdout, stderr []byte, err error)
-	Client  *http.Client
+	// ProcRoot is where /procs reads processes; "" means /proc.
+	ProcRoot string
+	Client   *http.Client
 
 	mu      sync.Mutex
 	table   []CephCommand
@@ -290,12 +292,16 @@ python3 -c 'import json,sys; print(json.dumps({"args": sys.argv[1:]}))' "$@" |
 # host-ro: the host's state the sandbox cannot see (ADR 0019).
 #   host-ro sockets [PORT]  listening TCP/UDP sockets on the host, optionally one local port
 #   host-ro unit NAME       a systemd unit's state, e.g. host-ro unit sshd
+#   host-ro procs           every process: pid, uid, name, executable path, mount ns
+#   host-ro failed          the failed systemd units
 S=` + dir + `/host.sock
 H="` + CallHeader + `: ${ADVISOR_CALL_ID:-}"
 case "$1" in
   sockets) curl -sS --unix-socket "$S" -H "$H" -G http://broker/sockets ${2:+--data-urlencode "port=$2"} ;;
+  procs) curl -sS --unix-socket "$S" -H "$H" http://broker/procs ;;
+  failed) curl -sS --unix-socket "$S" -H "$H" http://broker/failed ;;
   unit) curl -sS --unix-socket "$S" -H "$H" -G http://broker/unit --data-urlencode "name=$2" ;;
-  *) sed -n '2,4p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,6p' "$0" >&2; exit 2 ;;
 esac
 `
 	return map[string]string{"prom": prom, "ceph-ro": ceph, "host-ro": host}

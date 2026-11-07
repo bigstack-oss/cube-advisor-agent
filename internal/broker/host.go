@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,9 +22,10 @@ var unitName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9@._:-]{0,127}$`)
 // unitProps are the unit properties the host broker reports.
 const unitProps = "Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,ExecMainStartTimestamp"
 
-// host serves two fixed views of the host the sandbox cannot see: its
-// listening sockets (the sandbox has no network namespace of its own to
-// look at) and one unit's state (systemd's socket is hidden).
+// host serves fixed views of the host the sandbox cannot see: its listening
+// sockets (the sandbox has no network namespace of its own to look at), its
+// processes' executables (the sandbox may not resolve /proc/PID/exe), the
+// failed units and one unit's state (systemd's socket is hidden).
 func (s *Server) host(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	args := map[string]string{"path": r.URL.Path}
@@ -51,6 +55,13 @@ func (s *Server) host(w http.ResponseWriter, r *http.Request) {
 			}
 			argv = append(argv, "sport", "=", ":"+p)
 		}
+	case "/procs":
+		s.record(r, "broker:host", args, true, "", started, 0)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(listProcs(s.ProcRoot))
+		return
+	case "/failed":
+		name, argv = "systemctl", []string{"list-units", "--state=failed", "--no-legend", "--plain", "--no-pager"}
 	case "/unit":
 		u := r.URL.Query().Get("name")
 		args["unit"] = u
@@ -60,7 +71,7 @@ func (s *Server) host(w http.ResponseWriter, r *http.Request) {
 		}
 		name, argv = "systemctl", []string{"show", "--no-pager", "-p", unitProps, "--", u}
 	default:
-		refuse(http.StatusNotFound, "only /sockets and /unit?name=UNIT are served")
+		refuse(http.StatusNotFound, "only /sockets, /procs, /failed and /unit?name=UNIT are served")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), CallTimeout)
@@ -100,4 +111,47 @@ func LocalHostRun(ctx context.Context, name string, args []string) ([]byte, []by
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	err := cmd.Run()
 	return out.Bytes(), errOut.Bytes(), err
+}
+
+// listProcs reports every process as "pid<TAB>uid<TAB>comm<TAB>exe<TAB>mntns",
+// exe being /proc/PID/exe's target (a deleted file keeps its " (deleted)"
+// suffix; a kernel thread has none) and mntns its mount namespace, so a
+// reader can tell a container's paths from the host's. Never the command
+// line, which can carry credentials.
+func listProcs(root string) []byte {
+	if root == "" {
+		root = "/proc"
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return []byte("error: " + err.Error() + "\n")
+	}
+	var b bytes.Buffer
+	for _, e := range entries {
+		pid := e.Name()
+		if _, err := strconv.Atoi(pid); err != nil {
+			continue
+		}
+		exe, err := os.Readlink(filepath.Join(root, pid, "exe"))
+		if err != nil {
+			continue
+		}
+		comm, _ := os.ReadFile(filepath.Join(root, pid, "comm"))
+		uid := ""
+		if st, err := os.ReadFile(filepath.Join(root, pid, "status")); err == nil {
+			for _, line := range strings.Split(string(st), "\n") {
+				if f := strings.Fields(line); len(f) > 1 && f[0] == "Uid:" {
+					uid = f[1]
+					break
+				}
+			}
+		}
+		ns, _ := os.Readlink(filepath.Join(root, pid, "ns", "mnt"))
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\n", pid, uid, strings.TrimSpace(string(comm)), exe, ns)
+		if b.Len() > MaxResponse {
+			b.WriteString("[broker: answer cut]\n")
+			break
+		}
+	}
+	return b.Bytes()
 }

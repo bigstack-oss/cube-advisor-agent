@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -130,5 +131,61 @@ func TestHostClientReachesTheBroker(t *testing.T) {
 	out, err = exec.Command(filepath.Join(dir, "bin", "host-ro"), "unit", "sshd").CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "SubState=running") {
 		t.Fatalf("host-ro unit: %q %v", out, err)
+	}
+}
+
+// /procs lists each process's executable from outside the sandbox, which may
+// not resolve /proc/PID/exe; never its command line (#371).
+func TestHostListsProcessExecutables(t *testing.T) {
+	root := t.TempDir()
+	mk := func(pid, comm, uid, exe string) {
+		d := filepath.Join(root, pid)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.WriteFile(filepath.Join(d, "comm"), []byte(comm+"\n"), 0o644)
+		_ = os.WriteFile(filepath.Join(d, "status"), []byte("Name:\t"+comm+"\nUid:\t"+uid+"\t"+uid+"\t"+uid+"\t"+uid+"\n"), 0o644)
+		_ = os.WriteFile(filepath.Join(d, "cmdline"), []byte("secret-arg"), 0o644)
+		if exe != "" {
+			if err := os.Symlink(exe, filepath.Join(d, "exe")); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.MkdirAll(filepath.Join(d, "ns"), 0o755)
+			_ = os.Symlink("mnt:[4026531841]", filepath.Join(d, "ns", "mnt"))
+		}
+	}
+	mk("1", "systemd", "0", "/usr/lib/systemd/systemd")
+	mk("42", "x", "1000", "/tmp/x (deleted)")
+	mk("7", "kthreadd", "0", "")
+	_ = os.MkdirAll(filepath.Join(root, "self"), 0o755)
+
+	_, _, dir2 := start(t, http.NotFoundHandler(), func(s *Server) { s.ProcRoot = root })
+	resp, err := unixClient(filepath.Join(dir2, "host.sock")).Get("http://broker/procs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	body := string(b)
+	for _, want := range []string{"1\t0\tsystemd\t/usr/lib/systemd/systemd\tmnt:[4026531841]\n", "42\t1000\tx\t/tmp/x (deleted)\tmnt:[4026531841]\n"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "kthreadd") || strings.Contains(body, "secret-arg") {
+		t.Errorf("listed a kernel thread or a command line:\n%s", body)
+	}
+}
+
+func TestHostListsFailedUnits(t *testing.T) {
+	_, dir, ran := startHost(t)
+	resp, err := unixClient(filepath.Join(dir, "host.sock")).Get("http://broker/failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	got := ran.all()
+	if len(got) != 1 || strings.Join(got[0], " ") != "systemctl list-units --state=failed --no-legend --plain --no-pager" {
+		t.Fatalf("ran %v", got)
 	}
 }
