@@ -16,29 +16,16 @@ const LevelFileName = "action-level"
 
 // Level names how far the SaaS may go on this cluster.
 //
-// It mirrors the SaaS-side vocabulary (cube-ai-advisor internal/actionlevel),
-// declared here independently for the same reason Impact is: this side is the
-// enforcement, and a compromised SaaS is the case this package exists to
-// survive. Unlike Impact, these words *are* a recorded format — the file below
-// holds one of them — so ParseLevel must accept exactly what String produces.
-//
-// The values start at 1 so the zero value is "unset" rather than the lowest
-// real level. Nothing in this package should ever compare a Level with an
-// Impact numerically; see Serves.
+// It mirrors the Advisor's vocabulary (cube-ai-advisor internal/actionlevel).
+// These words are a recorded format, so ParseLevel must accept exactly what
+// String produces. The values start at 1 so the zero value is "unset".
 type Level int
 
 const (
-	// LevelObserve serves reads only. What every cluster has until someone
-	// on the cluster writes the file.
+	// The Advisor caps what it remembers by these levels (ADR 0019); the agent
+	// only reports the word.
 	LevelObserve Level = iota + 1
-	// LevelOperate additionally serves tools that change the cluster
-	// through a supported end-user interface — the UI, the public API, or
-	// hex_cli.
 	LevelOperate
-	// LevelInternal additionally serves tools that reach past those into
-	// hex_sdk, a config file or a service internal, and (ADR 0017) is the only
-	// level at which the agent serves an agent-driven console — the shell tool.
-	// The gate is in internal/agent; the shell runs through sshd, not here.
 	LevelInternal
 )
 
@@ -72,25 +59,6 @@ func ParseLevel(s string) (Level, error) {
 		return LevelInternal, nil
 	}
 	return DefaultLevel, fmt.Errorf("toolplane: %q is not an action level; expected observe, operate or internal", s)
-}
-
-// Serves reports whether this level admits a tool of the given impact class.
-//
-// One explicit set per level, never a comparison. The impact classes ascend by
-// what they touch and that ordering is not a permission scale: ImpactScratch is
-// admitted by whether this agent has a probe plane wired, not by any level, so
-// `impact <= level` would hand probes to a cluster that asked only for
-// operations. A class this build does not recognise is served by no level.
-func (l Level) Serves(i Impact) bool {
-	switch l {
-	case LevelObserve:
-		return i == ImpactRead
-	case LevelOperate:
-		return i == ImpactRead || i == ImpactOperate
-	case LevelInternal:
-		return i == ImpactRead || i == ImpactOperate || i == ImpactInternal
-	}
-	return false
 }
 
 // ReadLevel reads the cluster's action level from dir.

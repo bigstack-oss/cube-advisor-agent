@@ -106,17 +106,6 @@ func SandboxArgvFor(command string, timeout time.Duration, callID string) []stri
 	return append(argv, "--", "/bin/bash", "-c", command)
 }
 
-// validateSandbox checks a sandbox entry: read impact only, no argv of its own.
-func (t Tool) validateSandbox() error {
-	if t.Impact != ImpactRead {
-		return fmt.Errorf("tool %q is a sandbox tool and must be ImpactRead; the sandbox is what makes a free-form command a read", t.Name)
-	}
-	if len(t.Params) > 0 {
-		return fmt.Errorf("tool %q is a sandbox tool and takes only %q", t.Name, SandboxCommandArg)
-	}
-	return nil
-}
-
 // sandboxCommand extracts and checks the command text.
 func sandboxCommand(args map[string]string) (string, error) {
 	for k := range args {

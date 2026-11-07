@@ -1,11 +1,8 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 
-	"github.com/bigstack-oss/cube-advisor-agent/internal/cubecosapi"
-	"github.com/bigstack-oss/cube-advisor-agent/internal/openstack"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 )
 
@@ -45,7 +42,7 @@ type settingState struct {
 
 // settings is every per-cluster setting this agent reads. Adding one is adding
 // an entry here, and there is no second place to forget.
-var settings = []setting{actionLevel, consentDial, cubeCOSAccess, instanceProfile, openStackCredential}
+var settings = []setting{actionLevel, consentDial}
 
 // actionLevel is the cluster's own action level (ADR 0011).
 //
@@ -78,11 +75,7 @@ var actionLevel = setting{
 // is an error, and the setting is still applied because ReadConsent answers
 // always alongside it — asking too much beats refusing to start.
 //
-// The line says what the setting means as well as what it is, because one of
-// the three values currently means something an operator would not guess:
-// destructive asks only about tools that declare themselves so, and no tool in
-// this allowlist does. A cluster set to destructive acts unattended today. That
-// is a trap worth one clause at startup rather than a discovery later.
+// The agent reports it in the Hello; the Advisor applies it.
 var consentDial = setting{
 	name: "consent",
 	file: toolplane.ConsentFileName,
@@ -94,138 +87,8 @@ var consentDial = setting{
 			st.line = fmt.Sprintf("consent: %v; asking for %s until it is corrected", err, c)
 			return st
 		}
-		st.line = fmt.Sprintf("consent: %s%s", c, consentCaveat(c))
+		st.line = fmt.Sprintf("consent: %s", c)
 		return st
-	},
-}
-
-// consentCaveat names the gap between what a value promises and what this build
-// can deliver.
-//
-// Only destructive has one, and only while no tool declares itself destructive.
-// When one does this returns nothing and the line is just the value — which is
-// the point of computing it from the allowlist rather than writing the caveat
-// into the string: it disappears on its own when it stops being true, instead
-// of becoming the next comment that outlived its subject.
-func consentCaveat(c toolplane.Consent) string {
-	if c == toolplane.ConsentDestructive && !toolplane.DestructiveToolsExist() {
-		return " — but no tool in this build declares itself destructive, so nothing will be asked about"
-	}
-	return ""
-}
-
-// cubeCOSAccess is where this node's cube-cos-api is and what to call the
-// cluster when asking it (ADR 0016, slice 4).
-//
-// The file is an operator override. Absent, access is derived from the node's
-// settings file; if that fails too, the catalogue reads refuse.
-//
-// The client is built here rather than inside toolplane because the base URL
-// and the node token are its own: the getter interface exists precisely so
-// neither reaches the package that writes the audit log.
-// cubeCOSSettingsPath is a var so tests can point it at a fixture.
-var cubeCOSSettingsPath = toolplane.SettingsPath
-
-var cubeCOSAccess = setting{
-	name: "cube-cos-api access",
-	file: toolplane.CubeCOSFileName,
-	load: func(dir string) settingState {
-		access, err := toolplane.ReadCubeCOSAccess(dir)
-		source := ""
-		if errors.Is(err, toolplane.ErrNoCubeCOS) {
-			access, err = toolplane.DeriveCubeCOSAccess(cubeCOSSettingsPath)
-			if err != nil {
-				return settingState{line: fmt.Sprintf("cube-cos-api access: not configured and not derivable (%v); reads will refuse", err)}
-			}
-			source = " (derived from " + cubeCOSSettingsPath + ")"
-		}
-		switch {
-		case err != nil:
-			return settingState{
-				broken: true,
-				line:   fmt.Sprintf("cube-cos-api access: %v; reads will refuse until it is corrected", err),
-			}
-		}
-		client, err := cubecosapi.New(access.BaseURL)
-		if err != nil {
-			return settingState{
-				broken: true,
-				line:   fmt.Sprintf("cube-cos-api access: %v; reads will refuse until it is corrected", err),
-			}
-		}
-		return settingState{
-			line: fmt.Sprintf("cube-cos-api access: datacenter %s at %s%s", access.Datacenter, access.BaseURL, source),
-			apply: func(r *toolplane.Registry) {
-				r.ConfigureCubeCOS(access.Datacenter, client)
-			},
-		}
-	},
-}
-
-// instanceProfile is what this cluster creates: flavour, image and network
-// (ADR 0016, slice 3).
-//
-// Absent is the ordinary state and not an error — a cluster that has not opted
-// in creates nothing, and says which file would change that. A file the
-// operator wrote and this agent cannot honour is broken and not applied, so a
-// half-configured profile creates nothing rather than something half-chosen:
-// the empty field would otherwise reach the resolver, which refuses anyway,
-// but one loud line at startup beats the same refusal discovered per call.
-var instanceProfile = setting{
-	name: "instance profile",
-	file: toolplane.ProfileFileName,
-	load: func(dir string) settingState {
-		profile, err := toolplane.ReadInstanceProfile(dir)
-		switch {
-		case errors.Is(err, toolplane.ErrNoProfile):
-			return settingState{line: "instance profile: not configured; creates will refuse until one is"}
-		case err != nil:
-			return settingState{
-				broken: true,
-				line:   fmt.Sprintf("instance profile: %v; creates will refuse until it is corrected", err),
-			}
-		}
-		return settingState{
-			line: fmt.Sprintf("instance profile: flavor %s, image %s, network %s",
-				profile.Flavor, profile.Image, profile.Network),
-			apply: func(r *toolplane.Registry) { r.ConfigureInstanceProfile(profile) },
-		}
-	},
-}
-
-// openStackCredential is the application credential creates are made with.
-//
-// Absent is the ordinary state of every cluster that has not opted in: it
-// refuses creates with a message naming the missing configuration, which is a
-// different refusal from the action level's and says so. Wired only when
-// present, so opting in is writing a file.
-var openStackCredential = setting{
-	name: "OpenStack credential",
-	file: openstack.CredentialFileName,
-	load: func(dir string) settingState {
-		cred, err := openstack.ReadCredential(dir)
-		switch {
-		case errors.Is(err, openstack.ErrNoCredential):
-			return settingState{line: "OpenStack credential: not configured; creates will refuse until one is"}
-		case err != nil:
-			return settingState{
-				broken: true,
-				line:   fmt.Sprintf("OpenStack credential: %v; creates will refuse until it is corrected", err),
-			}
-		}
-		compute, err := openstack.NewCompute(cred)
-		if err != nil {
-			return settingState{
-				broken: true,
-				line:   fmt.Sprintf("OpenStack credential: %v; creates will refuse until it is corrected", err),
-			}
-		}
-		return settingState{
-			line: fmt.Sprintf("OpenStack credential: loaded for project %s", cred.Project),
-			apply: func(r *toolplane.Registry) {
-				r.ConfigureWriter(toolplane.BackendOpenStackCompute, compute)
-			},
-		}
 	},
 }
 
@@ -234,9 +97,6 @@ var openStackCredential = setting{
 // The one path every setting takes. run calls it and reads no operator
 // configuration itself; `config check` will call the same function, because a
 // second validator would be this design's own defect one level up.
-//
-// extra carries options that are not operator configuration — the probe plane,
-// which a flag enables.
 func configure(dir string, tools []toolplane.Tool, audit toolplane.Auditor, extra ...toolplane.Option) (*toolplane.Registry, []settingState, error) {
 	states := make([]settingState, len(settings))
 	opts := make([]toolplane.Option, 0, len(extra)+len(settings))

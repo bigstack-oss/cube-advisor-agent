@@ -20,25 +20,16 @@ const ConsentFileName = "consent"
 
 // Consent names how much this cluster asks a person before a call runs.
 //
-// It mirrors the SaaS-side vocabulary (cube-ai-advisor internal/consent),
-// declared here independently for the reason Level and Impact are: this side is
-// the enforcement, and a compromised SaaS is the case this package exists to
-// survive. Like Level, these words *are* a recorded format — the file below
-// holds one — so ParseConsent must accept exactly what String produces.
-//
-// The values ascend by how much they ask, and that ordering is a scale: every
-// value differs from its neighbour only in how many calls reach a human. Unlike
-// Level and Impact, comparing them is meaningful — though nothing here needs
-// to, because the fold lives in the SaaS where the tenant chain is known.
+// It mirrors the Advisor's vocabulary (cube-ai-advisor internal/consent). The
+// words are a recorded format, so ParseConsent must accept exactly what String
+// produces. The agent reports it in the Hello; the Advisor applies it.
 type Consent int
 
 const (
 	// ConsentNever asks nobody. The cluster acts within its action level
 	// unattended.
 	ConsentNever Consent = iota + 1
-	// ConsentDestructive asks only for calls whose tool declares itself
-	// destructive. No tool in this allowlist does, so today this asks for
-	// nothing — see DestructiveToolsExist.
+	// ConsentDestructive asks only for destructive calls.
 	ConsentDestructive
 	// ConsentAlways asks for every call above a read. What an unconfigured
 	// cluster gets.
@@ -75,28 +66,6 @@ func ParseConsent(s string) (Consent, error) {
 		return ConsentAlways, nil
 	}
 	return DefaultConsent, fmt.Errorf("toolplane: %q is not a consent setting; expected never, destructive or always", s)
-}
-
-// Asks reports whether this setting requires a person to have agreed before a
-// call of the given class runs.
-//
-// A read never asks whatever the setting says: there is nothing to agree to.
-// Above that the setting decides, and an unrecognised one asks — the same
-// defence ParseConsent makes by returning the default, repeated here because a
-// value could reach this function without passing through that one.
-func (c Consent) Asks(i Impact, destructive bool) bool {
-	if i == ImpactRead {
-		return false
-	}
-	switch c {
-	case ConsentNever:
-		return false
-	case ConsentDestructive:
-		return destructive
-	case ConsentAlways:
-		return true
-	}
-	return true
 }
 
 // ReadConsent reads the cluster's consent setting from dir.

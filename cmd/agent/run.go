@@ -36,8 +36,8 @@ func runCmd(args []string) int {
 	dir := fs.String("dir", identity.DefaultDir, "where the identity is stored")
 	auditPath := fs.String("audit", "/var/log/cube-advisor-agent/toolcalls.log",
 		"append-only audit log of every tool call served")
-	probes := fs.Bool("probes", false,
-		"serve the probe plane: bounded measurements that create and delete their own scratch storage")
+	// Accepted and ignored: the probe plane moved to an approved script.
+	_ = fs.Bool("probes", false, "ignored; kept so existing unit files still start")
 	webTargets := fs.String("web-targets", "/etc/cube-advisor-agent/web-targets.json",
 		"JSON map of symbolic web target names to host:port this node may proxy; absent means none")
 	if err := fs.Parse(args); err != nil {
@@ -99,20 +99,10 @@ func runCmd(args []string) int {
 			servedBrokers = append(servedBrokers, "os-ro")
 		}
 	}
-	var opts []toolplane.Option
-	var probeRunner *toolplane.ProbeRunner
-	if *probes {
-		probeRunner, err = toolplane.NewProbeRunner(toolplane.Probes, auditor)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "run: %v\n", err)
-			return exitFailed
-		}
-		opts = append(opts, toolplane.WithProbes(probeRunner))
-	}
 	// Every per-cluster setting the operator configured, through the one path
 	// that reads them (ADR 0016). A setting absent from that list does not
 	// exist, which is what stops the next one shipping unwired.
-	reg, states, err := configure(*dir, toolplane.Allowlist, auditor, opts...)
+	reg, states, err := configure(*dir, toolplane.Tools, auditor)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return exitFailed
@@ -132,13 +122,6 @@ func runCmd(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-
-	if probeRunner != nil {
-		// Sweep before serving. Scratch left by a process that was killed
-		// mid-probe outlives it, and this is the only thing that ever notices:
-		// the deferred cleanup died with the process that owed it.
-		go probeRunner.RunSweeper(ctx)
-	}
 
 	hello := helloFor(id.ClusterID, fp, reg)
 	url := "wss://" + serverAddr + tunnel.WSPath

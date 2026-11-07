@@ -198,3 +198,24 @@ func (a *Admin) authenticate(ctx context.Context) (string, map[string]string, er
 	a.mu.Unlock()
 	return tok, cat, nil
 }
+
+// tokenResponse is the part of Keystone's answer this client reads.
+type tokenResponse struct {
+	Token struct {
+		ExpiresAt time.Time `json:"expires_at"`
+		Project   struct {
+			Name string `json:"name"`
+			ID   string `json:"id"`
+		} `json:"project"`
+		Catalog []struct {
+			Type      string `json:"type"`
+			Endpoints []struct {
+				Interface string `json:"interface"`
+				URL       string `json:"url"`
+			} `json:"endpoints"`
+		} `json:"catalog"`
+	} `json:"token"`
+}
+
+// renewMargin is how long before expiry a cached token is replaced.
+const renewMargin = 5 * time.Minute

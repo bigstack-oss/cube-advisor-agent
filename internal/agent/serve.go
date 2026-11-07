@@ -2,10 +2,9 @@
 // SaaS opens and serves the ones it is willing to serve.
 //
 // This is where the pieces meet, and where the claim they exist to support has
-// to hold — that a compromised or prompt-injected SaaS can at worst read health
-// and logs. The protocol makes an address unrepresentable, the allowlist makes
-// an unanticipated command unreachable, and this package must not quietly
-// become the place either stops being true.
+// to hold — that a compromised or prompt-injected SaaS can at worst read. The
+// protocol makes an address unrepresentable, the sandbox makes a tool call
+// read-only, and this package must not become the place either stops being true.
 package agent
 
 import (
@@ -199,19 +198,11 @@ func (s *Server) serveTool(ctx context.Context, ch *tunnel.Channel) {
 	// Approved comes from the open frame the protocol already validated, for
 	// the reason the tool name does: one source of truth per fact, and it is
 	// the one that was checked.
-	out, err := s.Tools.Call(ctx, name, args, ch.Open.Approved)
+	out, err := s.Tools.Call(ctx, name, args)
 	if err != nil {
-		// Failures are reported generically, with one exception: a level
-		// refusal carries RefusedAtLevelReason, the one reason the protocol
-		// allows to be sent. Without it the SaaS cannot explain the refusal and
-		// the model reports a bare block (cube-ai-advisor#232). It names no tool
-		// and no value, so it leaks nothing a probing SaaS could map.
+		// Reported generically: a precise refusal is a probe oracle.
 		log.Printf("agent: %s failed: %v", name, err)
-		reason := tunnelproto.RefusedReason
-		if errors.Is(err, toolplane.ErrRefusedAtLevel) {
-			reason = tunnelproto.RefusedAtLevelReason
-		}
-		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: reason})
+		_ = writeResult(ch, tunnelproto.ToolResult{OK: false, Error: tunnelproto.RefusedReason})
 		return
 	}
 	_ = writeResult(ch, tunnelproto.ToolResult{OK: true, Output: string(out)})

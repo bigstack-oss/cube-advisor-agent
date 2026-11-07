@@ -37,8 +37,8 @@ func TestConfigCheckExitsZeroWhenEverySettingIsValid(t *testing.T) {
 			t.Errorf("output does not report setting %q:\n%s", e.name, out)
 		}
 	}
-	if !strings.Contains(out, "Not checked:") {
-		t.Errorf("a passing check should say what it did not check, or it reads as a stronger claim than it is:\n%s", out)
+	if !strings.Contains(out, uncheckedNotice) {
+		t.Errorf("a passing check should say what it checked:\n%s", out)
 	}
 }
 
@@ -49,9 +49,6 @@ func TestConfigCheckExitsZeroOnAnUnconfiguredDirectory(t *testing.T) {
 	code, out, _ := configCheck(t, "-dir", t.TempDir())
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d: nothing configured is a state, not a mistake:\n%s", code, exitOK, out)
-	}
-	if !strings.Contains(out, "not configured") {
-		t.Errorf("an unconfigured directory should say so per setting:\n%s", out)
 	}
 }
 
@@ -73,7 +70,7 @@ func TestConfigCheckReportsABrokenSettingAndExitsNonZero(t *testing.T) {
 	if !strings.Contains(out, "operator") {
 		t.Errorf("the report should quote what the operator wrote, so they can see their own typo:\n%s", out)
 	}
-	if strings.Contains(out, "Not checked:") {
+	if strings.Contains(out, uncheckedNotice) {
 		t.Error("a failing check must not print the reassurance a passing one does")
 	}
 }
@@ -87,7 +84,7 @@ func TestConfigCheckReportsTheStatesConfigureReturns(t *testing.T) {
 		writeSetting(t, dir, e)
 	}
 
-	_, states, err := configure(dir, toolplane.Allowlist, checkAuditor())
+	_, states, err := configure(dir, toolplane.Tools, checkAuditor())
 	if err != nil {
 		t.Fatal(err)
 	}

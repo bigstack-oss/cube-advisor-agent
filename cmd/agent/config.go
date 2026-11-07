@@ -38,7 +38,7 @@ func configCmd(args []string) int {
 func configUsage() {
 	fmt.Fprintf(os.Stderr, `cube-advisor-agent config
 
-  check [-dir <path>] [-probes]   report what each setting resolves to
+  check [-dir <path>]   report what each setting resolves to
 `)
 }
 
@@ -58,27 +58,12 @@ func configCheckCmd(args []string) int {
 	fs := flag.NewFlagSet("config check", flag.ContinueOnError)
 	dir := fs.String("dir", identity.DefaultDir,
 		"the agent directory whose settings to check; a staging copy is checked by pointing this at it")
-	probes := fs.Bool("probes", false,
-		"check what `run -probes` would serve: the probe plane changes the tool count, not any setting")
+	_ = fs.Bool("probes", false, "ignored; kept for compatibility")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 
-	// Mirrors run's own probe option so the tool count answers for the agent
-	// the operator will actually start. Building a ProbeRunner validates the
-	// probe list and touches nothing else; the sweeper that does touch scratch
-	// is started by run, separately, and never here.
-	var opts []toolplane.Option
-	if *probes {
-		runner, err := toolplane.NewProbeRunner(toolplane.Probes, checkAuditor())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "config check: %v\n", err)
-			return exitFailed
-		}
-		opts = append(opts, toolplane.WithProbes(runner))
-	}
-
-	reg, states, err := configure(*dir, toolplane.Allowlist, checkAuditor(), opts...)
+	reg, states, err := configure(*dir, toolplane.Tools, checkAuditor())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config check: %v\n", err)
 		return exitFailed
@@ -114,9 +99,7 @@ func configCheckCmd(args []string) int {
 // a checker that sometimes talks to a cluster is a different tool with
 // different failure modes — one an operator learns to ignore the first time it
 // fails because the cloud was busy.
-const uncheckedNotice = "checked: every file parses, its mode is safe and its values are well-formed. " +
-	"Not checked: that these ids exist on this cluster, that the credential redeems, " +
-	"or that the api answers — the first create and the first read are what prove those."
+const uncheckedNotice = "checked: every file parses, its mode is safe and its values are well-formed."
 
 // checkAuditor is the auditor a check builds its registry with.
 //

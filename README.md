@@ -33,7 +33,7 @@ channels back over the single stream. No inbound rules, no VPN.
 The protocol's central guarantee is what it *cannot* express:
 
 > A channel-open names a **symbolic target** — `ssh:sky141`, `web:dashboard`,
-> `tool:cluster_check` — never an address. `Target.Validate` rejects ports, IP
+> `tool:shell_read` — never an address. `Target.Validate` rejects ports, IP
 > literals, URLs, credentials, paths and shell metacharacters.
 
 So a compromised or prompt-injected SaaS cannot use the tunnel to reach an
@@ -134,7 +134,7 @@ to keep the process alive.
 
 Early, but no longer only a protocol. Built and tested: the wire protocol and
 its target validation, the multiplexed transport with flow control and
-reconnect, the read-only tool plane and its allowlist, the serve loop joining
+reconnect, the sandboxed read plane and its brokers, the serve loop joining
 the two, the enrolled per-node identity, and the release manifest.
 
 Not built: the console plane, the daemon that wires the pieces into a running

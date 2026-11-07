@@ -122,43 +122,6 @@ func TestEveryLevelRoundTripsThroughItsRecordedWord(t *testing.T) {
 	}
 }
 
-// The whole mapping, written out rather than derived, because deriving it is
-// the mistake: the classes ascend read(1) scratch(2) operate(3) internal(4), so
-// `impact <= level` would serve probes to a cluster that asked for operations.
-// A probe plane is a property of this agent's build, never of a level.
-func TestEachLevelServesTheClassesItNames(t *testing.T) {
-	for _, tc := range []struct {
-		level  Level
-		serves map[Impact]bool
-	}{
-		{LevelObserve, map[Impact]bool{
-			ImpactRead: true, ImpactScratch: false, ImpactOperate: false, ImpactInternal: false,
-		}},
-		{LevelOperate, map[Impact]bool{
-			ImpactRead: true, ImpactScratch: false, ImpactOperate: true, ImpactInternal: false,
-		}},
-		{LevelInternal, map[Impact]bool{
-			ImpactRead: true, ImpactScratch: false, ImpactOperate: true, ImpactInternal: true,
-		}},
-	} {
-		for impact, want := range tc.serves {
-			if got := tc.level.Serves(impact); got != want {
-				t.Errorf("%v.Serves(%v) = %v, want %v", tc.level, impact, got, want)
-			}
-		}
-	}
-}
-
-func TestAnUnrecognisedLevelServesNothing(t *testing.T) {
-	for _, bad := range []Level{0, LevelInternal + 1} {
-		for _, i := range []Impact{ImpactRead, ImpactScratch, ImpactOperate, ImpactInternal} {
-			if bad.Serves(i) {
-				t.Errorf("level %d served impact %v; absence of a rule is not permission", bad, i)
-			}
-		}
-	}
-}
-
 // The vocabulary is kept in step with cube-ai-advisor internal/actionlevel by
 // hand — nothing carries a level across the wire, so there is no contract to
 // check against, only two lists that must say the same words. Pinning the words

@@ -1,25 +1,16 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/bigstack-oss/cube-advisor-agent/internal/openstack"
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 )
 
 // These tests call configure — the function run calls — against a temporary
 // directory. That is the whole point of them.
-//
-// ConfigureInstanceProfile and ConfigureCubeCOS shipped documented, exercised
-// by tests, and never called: cmd/agent/run.go had no block for either, and
-// lab validation on real hardware was the first thing to notice. Every test
-// that found them green built its own Registry, so none of them ever asked
-// whether anything builds one in production. A test that does not run the
-// startup path cannot catch this, however thorough it is about everything else.
 //
 // Two layers, because exhaustiveness alone is not enough. The first catches a
 // setting nothing loads; the second catches a setting loaded into nothing,
@@ -38,15 +29,6 @@ type effect struct {
 
 func effects(t *testing.T) []effect {
 	t.Helper()
-	cred, err := json.Marshal(openstack.Credential{
-		AuthURL: "https://10.0.0.1:5000/v3",
-		ID:      "an-application-credential",
-		Secret:  "not-a-real-secret",
-		Project: "advisor-lab",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	return []effect{
 		{
 			name:    "action level",
@@ -65,42 +47,6 @@ func effects(t *testing.T) []effect {
 			// file can stop the cluster asking a person before it acts.
 			mode:    0o644,
 			observe: func(r *toolplane.Registry) string { return r.Consent().String() },
-		},
-		{
-			name:    "cube-cos-api access",
-			file:    toolplane.CubeCOSFileName,
-			content: `{"datacenter":"cube-combined","base_url":"http://10.32.1.200:8082"}` + "\n",
-			// The instance profile's rule: no secret in the file, but whoever
-			// may write it chooses where the node token is sent.
-			mode:    0o644,
-			observe: func(r *toolplane.Registry) string { return r.Datacenter() },
-		},
-		{
-			name:    "instance profile",
-			file:    toolplane.ProfileFileName,
-			content: `{"flavor":"m1.large","image":"ubuntu-24.04","network":"tenant-net"}` + "\n",
-			// The action level's rule, not the credential's: no secret, but
-			// whoever may write it chooses the image.
-			mode: 0o644,
-			observe: func(r *toolplane.Registry) string {
-				p := r.Profile()
-				return strings.Join([]string{p.Flavor, p.Image, p.Network}, "/")
-			},
-		},
-		{
-			name:    "OpenStack credential",
-			file:    openstack.CredentialFileName,
-			content: string(cred),
-			// Owner only: it holds a secret, and ReadCredential refuses
-			// anything a group or the world may read.
-			mode: 0o600,
-			observe: func(r *toolplane.Registry) string {
-				names := make([]string, 0, 2)
-				for _, b := range r.Writers() {
-					names = append(names, b.String())
-				}
-				return strings.Join(names, ",")
-			},
 		},
 	}
 }
@@ -171,7 +117,7 @@ func TestABrokenSettingIsMarkedAndStillConfigures(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reg, states, err := configure(dir, toolplane.Allowlist, discardAuditor())
+	reg, states, err := configure(dir, toolplane.Tools, discardAuditor())
 	if err != nil {
 		t.Fatalf("configure refused to build a registry over a malformed setting: %v", err)
 	}
@@ -196,45 +142,10 @@ func TestABrokenSettingIsMarkedAndStillConfigures(t *testing.T) {
 	}
 }
 
-// A profile naming two of three fields is broken rather than unset, and is not
-// applied: a half-configured profile creates nothing rather than something
-// half-chosen. The agent still configures and still serves its reads.
-func TestAHalfConfiguredProfileIsBrokenAndNotApplied(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, toolplane.ProfileFileName)
-	if err := os.WriteFile(path, []byte(`{"flavor":"m1.large","image":"ubuntu-24.04"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	reg, states, err := configure(dir, toolplane.Allowlist, discardAuditor())
-	if err != nil {
-		t.Fatalf("configure refused to build a registry over a half-configured profile: %v", err)
-	}
-	if got := reg.Profile(); got.Flavor != "" || got.Image != "" {
-		t.Errorf("Profile() = %+v over a half-configured file, want nothing applied", got)
-	}
-
-	var broken []string
-	for _, st := range states {
-		if st.broken {
-			broken = append(broken, st.line)
-		}
-	}
-	if len(broken) != 1 {
-		t.Fatalf("broken settings = %d, want exactly the profile: %v", len(broken), broken)
-	}
-	if !strings.Contains(broken[0], "network") {
-		t.Errorf("the line should name the missing field, not the file in general: %q", broken[0])
-	}
-}
-
 // Nothing configured is the ordinary state of a cluster that has not opted in:
 // every setting still reports, and the agent serves reads.
 func TestAnUnconfiguredDirectoryReportsEverySettingAndServesReads(t *testing.T) {
-	reg, states, err := configure(t.TempDir(), toolplane.Allowlist, discardAuditor())
+	reg, states, err := configure(t.TempDir(), toolplane.Tools, discardAuditor())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +170,7 @@ func TestAnUnconfiguredDirectoryReportsEverySettingAndServesReads(t *testing.T) 
 
 func configureIn(t *testing.T, dir string) *toolplane.Registry {
 	t.Helper()
-	reg, _, err := configure(dir, toolplane.Allowlist, discardAuditor())
+	reg, _, err := configure(dir, toolplane.Tools, discardAuditor())
 	if err != nil {
 		t.Fatalf("configure(%s): %v", dir, err)
 	}
@@ -282,26 +193,3 @@ func writeSetting(t *testing.T, dir string, e effect) {
 // with: these tests and that command both want a registry and no audit log, so
 // they should not disagree about how to get one.
 func discardAuditor() toolplane.Auditor { return checkAuditor() }
-
-func TestCubeCOSAccessFallsBackToTheNodesSettings(t *testing.T) {
-	settings := filepath.Join(t.TempDir(), "settings.txt")
-	if err := os.WriteFile(settings, []byte("net.hostname = cube-r730\ncubesys.management = eth0\nnet.if.addr.eth0 = 10.32.1.210\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	old := cubeCOSSettingsPath
-	cubeCOSSettingsPath = settings
-	defer func() { cubeCOSSettingsPath = old }()
-
-	st := cubeCOSAccess.load(t.TempDir()) // no cube-cos-api.json
-	if st.broken || st.apply == nil {
-		t.Fatalf("no file and derivable settings should configure access: %+v", st)
-	}
-	if !strings.Contains(st.line, "cube-r730 at http://10.32.1.210:8082 (derived from") {
-		t.Errorf("line = %q", st.line)
-	}
-
-	cubeCOSSettingsPath = filepath.Join(t.TempDir(), "absent")
-	if st := cubeCOSAccess.load(t.TempDir()); st.broken || st.apply != nil {
-		t.Errorf("underivable settings should leave access off, not broken: %+v", st)
-	}
-}

@@ -1,8 +1,6 @@
 package toolplane
 
 import (
-	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,104 +88,6 @@ func TestAReadableConsentFileIsFine(t *testing.T) {
 	}
 }
 
-// Each value asks for what it says and no less. The read row is the one that
-// holds whatever the dial says: there is nothing to agree to.
-func TestEachConsentValueAsksForWhatItNames(t *testing.T) {
-	for _, c := range []struct {
-		consent     Consent
-		impact      Impact
-		destructive bool
-		want        bool
-	}{
-		{ConsentAlways, ImpactRead, false, false},
-		{ConsentAlways, ImpactOperate, false, true},
-		{ConsentAlways, ImpactInternal, false, true},
-		{ConsentAlways, ImpactScratch, false, true},
-
-		{ConsentDestructive, ImpactRead, true, false},
-		{ConsentDestructive, ImpactOperate, false, false},
-		{ConsentDestructive, ImpactOperate, true, true},
-
-		{ConsentNever, ImpactRead, false, false},
-		{ConsentNever, ImpactOperate, true, false},
-		{ConsentNever, ImpactInternal, true, false},
-
-		// A value from a newer build, or a zero one, asks. The same
-		// defence ParseConsent makes by returning the default.
-		{Consent(0), ImpactOperate, false, true},
-		{Consent(99), ImpactOperate, false, true},
-		{Consent(0), ImpactRead, false, false},
-	} {
-		if got := c.consent.Asks(c.impact, c.destructive); got != c.want {
-			t.Errorf("%s.Asks(%s, destructive=%v) = %v, want %v",
-				c.consent, c.impact, c.destructive, got, c.want)
-		}
-	}
-}
-
-// The executor's half of the dial. A cluster that requires a person refuses a
-// call the caller did not say one approved — which is what makes a stale SaaS
-// mirror a visible refusal rather than a silent unattended call.
-func TestAClusterRequiringAPersonRefusesAnUnapprovedCall(t *testing.T) {
-	r, rec := newConsentRegistry(t, ConsentAlways)
-
-	_, err := r.Call(context.Background(), "create_instance",
-		map[string]string{"{name}": "web-03"}, false)
-	if !errors.Is(err, ErrRefusedWithoutApproval) {
-		t.Fatalf("err = %v, want ErrRefusedWithoutApproval", err)
-	}
-	if got := lastReason(rec); !strings.Contains(got, "requires a person") {
-		t.Errorf("audit reason %q does not say a person was required", got)
-	}
-}
-
-// The same call, with the caller reporting a person, reaches the tool. Without
-// this the test above would pass for a registry that refuses everything.
-func TestAnApprovedCallIsNotRefusedByConsent(t *testing.T) {
-	r, _ := newConsentRegistry(t, ConsentAlways)
-
-	_, err := r.Call(context.Background(), "create_instance",
-		map[string]string{"{name}": "web-03"}, true)
-	if errors.Is(err, ErrRefusedWithoutApproval) {
-		t.Fatalf("an approved call was refused for want of a person")
-	}
-}
-
-// A cluster that asks nobody runs unattended within its action level. The
-// customer chose it.
-func TestAClusterAtNeverRunsWithoutAPerson(t *testing.T) {
-	r, _ := newConsentRegistry(t, ConsentNever)
-
-	_, err := r.Call(context.Background(), "create_instance",
-		map[string]string{"{name}": "web-03"}, false)
-	if errors.Is(err, ErrRefusedWithoutApproval) {
-		t.Fatalf("a cluster at consent never still demanded a person")
-	}
-}
-
-// Reads are never gated on a person, whatever the dial says — otherwise a
-// cluster at the default would stop serving its own catalogue.
-func TestConsentNeverWithholdsAReadFromAnUnapprovedCaller(t *testing.T) {
-	r, _, _ := newGetRegistry(t, []Tool{catalogTool()}, "sky-dc")
-	WithConsent(ConsentAlways)(r)
-
-	if _, err := r.Call(context.Background(), "cube_cos_read",
-		map[string]string{"resource": "nodes"}, false); err != nil {
-		t.Fatalf("an unapproved read was refused: %v", err)
-	}
-}
-
-// No tool declares itself destructive today, so a cluster set to destructive
-// asks about nothing. Stated as a test rather than a comment so it stops being
-// true by failing, on the day someone adds one — at which point the startup
-// caveat disappears too.
-func TestNoToolIsDestructiveYet(t *testing.T) {
-	if DestructiveToolsExist() {
-		t.Fatal("a tool now declares itself destructive: " +
-			"consent destructive has members, so the startup caveat must go and this test with it")
-	}
-}
-
 func writeConsent(t *testing.T, dir, content string, mode os.FileMode) {
 	t.Helper()
 	path := filepath.Join(dir, ConsentFileName)
@@ -199,21 +99,4 @@ func writeConsent(t *testing.T, dir, content string, mode os.FileMode) {
 	if err := os.Chmod(path, mode); err != nil {
 		t.Fatal(err)
 	}
-}
-
-// newConsentRegistry is writeRegistry with the dial set: an agent whose
-// operator enabled writes and then said how much they want to be asked.
-func newConsentRegistry(t *testing.T, c Consent) (*Registry, *recorder) {
-	t.Helper()
-	r, _, rec := writeRegistry(t, nil)
-	WithConsent(c)(r)
-	return r, rec
-}
-
-func lastReason(rec *recorder) string {
-	calls := rec.snapshot()
-	if len(calls) == 0 {
-		return ""
-	}
-	return calls[len(calls)-1].Reason
 }

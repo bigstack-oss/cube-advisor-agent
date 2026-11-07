@@ -58,18 +58,10 @@ func harnessWithConsole(t *testing.T, con *console.Handler) (*tunnel.Session, *r
 	return harnessFull(t, con, nil)
 }
 
-// harnessWith is harness plus a hook that configures the registry — the action
-// level, the consent dial, a wired writer — for tests about what a configured
-// cluster serves rather than about the transport.
-func harnessWith(t *testing.T, configure func(*toolplane.Registry)) (*tunnel.Session, *recorder) {
-	t.Helper()
-	return harnessFull(t, nil, configure)
-}
-
 func harnessFull(t *testing.T, con *console.Handler, configure func(*toolplane.Registry)) (*tunnel.Session, *recorder) {
 	t.Helper()
 	rec := &recorder{}
-	reg, err := toolplane.New(toolplane.Allowlist, rec)
+	reg, err := toolplane.New(toolplane.Tools, rec)
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
@@ -171,28 +163,17 @@ func callTool(t *testing.T, saas *tunnel.Session, id uint32, name string, args m
 func TestToolCallEndToEnd(t *testing.T) {
 	saas, rec := harness(t)
 
-	res := callTool(t, saas, 1, "cluster_check", nil)
+	res := callTool(t, saas, 1, "shell_read", map[string]string{"command": "uptime"})
 	if !res.OK {
 		t.Fatalf("call failed: %+v", res)
 	}
-	if !strings.Contains(res.Output, "hex_cli -c cluster -c check") {
+	if !strings.Contains(res.Output, "/bin/bash -c uptime") {
 		t.Errorf("output = %q", res.Output)
 	}
 
 	calls := rec.snapshot()
-	if len(calls) != 1 || !calls[0].Allowed || calls[0].Tool != "cluster_check" {
+	if len(calls) != 1 || !calls[0].Allowed || calls[0].Tool != "shell_read" {
 		t.Fatalf("audit = %+v", calls)
-	}
-}
-
-func TestToolCallWithPermittedArgument(t *testing.T) {
-	saas, _ := harness(t)
-	res := callTool(t, saas, 1, "cluster_health", map[string]string{"{group}": "Storage"})
-	if !res.OK {
-		t.Fatalf("call failed: %+v", res)
-	}
-	if !strings.HasSuffix(strings.TrimSpace(res.Output), "health Storage") {
-		t.Errorf("output = %q", res.Output)
 	}
 }
 
@@ -201,7 +182,7 @@ func TestRefusalsAreOpaqueToTheSaaSButDetailedLocally(t *testing.T) {
 	saas, rec := harness(t)
 
 	unknown := callTool(t, saas, 1, "run_anything", nil)
-	badArg := callTool(t, saas, 2, "cluster_health", map[string]string{"{group}": "Storage; rm -rf /"})
+	badArg := callTool(t, saas, 2, "shell_read", map[string]string{"cmd": "uptime"})
 
 	for _, r := range []tunnelproto.ToolResult{unknown, badArg} {
 		if r.OK {
@@ -247,13 +228,13 @@ func TestToolChannelCannotNameAConsoleTarget(t *testing.T) {
 // single slow tool blocks every console session on the same connection.
 func TestASlowCallDoesNotStallOtherChannels(t *testing.T) {
 	rec := &recorder{}
-	reg, err := toolplane.New(toolplane.Allowlist, rec)
+	reg, err := toolplane.New(toolplane.Tools, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	release := make(chan struct{})
 	reg.SetRunnerForTest(func(ctx context.Context, argv []string, max int) ([]byte, error) {
-		if strings.Contains(strings.Join(argv, " "), "journalctl") {
+		if strings.Contains(strings.Join(argv, " "), "sleep 30") {
 			select {
 			case <-release:
 			case <-ctx.Done():
@@ -294,15 +275,15 @@ func TestASlowCallDoesNotStallOtherChannels(t *testing.T) {
 
 	// Start the slow call and leave it hanging.
 	slow, err := saas.OpenChannel(ctx, 1, tunnelproto.ChannelTool,
-		tunnelproto.Target{Kind: tunnelproto.TargetTool, Name: "service_log_tail"})
+		tunnelproto.Target{Kind: tunnelproto.TargetTool, Name: "shell_read"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = json.NewEncoder(slow).Encode(map[string]string{"{unit}": "keystone", "{lines}": "50"})
+	_ = json.NewEncoder(slow).Encode(map[string]string{"command": "sleep 30"})
 
 	// A second call must complete while the first is still stuck.
 	done := make(chan tunnelproto.ToolResult, 1)
-	go func() { done <- callTool(t, saas, 2, "cluster_check", nil) }()
+	go func() { done <- callTool(t, saas, 2, "shell_read", map[string]string{"command": "uptime"}) }()
 
 	select {
 	case res := <-done:
@@ -319,7 +300,7 @@ func TestASlowCallDoesNotStallOtherChannels(t *testing.T) {
 // The session ending is not an error the agent should log as one.
 func TestServeReturnsCleanlyWhenTheSessionEnds(t *testing.T) {
 	rec := &recorder{}
-	reg, err := toolplane.New(toolplane.Allowlist, rec)
+	reg, err := toolplane.New(toolplane.Tools, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +383,7 @@ func TestATransportResetEndsTheSession(t *testing.T) {
 // reconnect with backoff. Before the fix this spun forever.
 func TestServeReturnsWhenThePeerResetsTheConnection(t *testing.T) {
 	rec := &recorder{}
-	reg, err := toolplane.New(toolplane.Allowlist, rec)
+	reg, err := toolplane.New(toolplane.Tools, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,52 +601,12 @@ func TestHumanConsoleUnaffectedByLevel(t *testing.T) {
 	}
 }
 
-// A level refusal must reach the SaaS as the one reason the executor is allowed
-// to explain (RefusedAtLevelReason), not the generic refusal — otherwise the
-// SaaS cannot tell the model why, and the model reports a bare block (the
-// 2026-09-16 cube-combined bug, cube-ai-advisor#232). create_instance at
-// observe is refused by the level before anything else.
-func TestLevelRefusalReasonReachesTheSaaS(t *testing.T) {
-	saas, _ := harness(t) // default level is observe
-	res := callConfiguringTool(t, saas, 1, false)
-	if res.OK {
-		t.Fatal("create_instance should be refused at observe")
-	}
-	if res.Error != tunnelproto.RefusedAtLevelReason {
-		t.Errorf("wire reason = %q, want RefusedAtLevelReason so the SaaS can explain it", res.Error)
-	}
-}
-
-// Every other refusal stays deliberately unspecific: a call the level allows
-// but the consent dial gates comes back as the generic reason, so the level
-// reason is the one exception, not a new habit of explaining refusals.
-func TestOtherRefusalsStayGeneric(t *testing.T) {
-	saas, _ := harnessConsoleAtLevel(t, nil, toolplane.LevelInternal) // allowed by level, gated by consent
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	conn, err := saas.OpenChannel(ctx, 7, tunnelproto.ChannelTool,
-		tunnelproto.Target{Kind: tunnelproto.TargetTool, Name: "create_instance"})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	// A name the executor's allowlist rejects — a non-level refusal.
-	_ = json.NewEncoder(conn).Encode(map[string]string{"{name}": "Bad Name!!"})
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var res tunnelproto.ToolResult
-	if err := json.NewDecoder(conn).Decode(&res); err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if res.OK || res.Error == tunnelproto.RefusedAtLevelReason {
-		t.Errorf("a non-level refusal leaked a specific reason: %+v", res)
-	}
-}
-
 // SIGTERM cancels the agent's context, and nothing else: the SaaS keeps the
 // session open. On the 1cc r630 every `systemctl restart` waited the full 90 s
 // stop timeout and ended in SIGKILL, because Accept blocked with no context.
 func TestServeReturnsWhenTheContextIsCancelled(t *testing.T) {
 	rec := &recorder{}
-	reg, err := toolplane.New(toolplane.Allowlist, rec)
+	reg, err := toolplane.New(toolplane.Tools, rec)
 	if err != nil {
 		t.Fatal(err)
 	}

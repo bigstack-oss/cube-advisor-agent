@@ -11,7 +11,7 @@ import (
 func TestShellReadRunsTheCommandInsideTheSandbox(t *testing.T) {
 	r, rec, argv := newTestRegistry(t)
 	cmd := "ps -eo pid,rss,comm --sort=-rss | head -5"
-	if _, err := r.Call(context.Background(), "shell_read", map[string]string{"command": cmd}, false); err != nil {
+	if _, err := r.Call(context.Background(), "shell_read", map[string]string{"command": cmd}); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	got := *argv
@@ -39,13 +39,6 @@ func TestShellReadRunsTheCommandInsideTheSandbox(t *testing.T) {
 	}
 }
 
-func TestShellReadIsServedAtObserve(t *testing.T) {
-	r, _, _ := newTestRegistry(t)
-	if _, err := r.Call(context.Background(), "shell_read", map[string]string{"command": "uptime"}, false); errors.Is(err, ErrRefusedAtLevel) {
-		t.Fatal("shell_read refused at the default level; the sandbox makes it a read")
-	}
-}
-
 func TestShellReadRefusesBadArguments(t *testing.T) {
 	r, _, argv := newTestRegistry(t)
 	for name, args := range map[string]map[string]string{
@@ -56,23 +49,12 @@ func TestShellReadRefusesBadArguments(t *testing.T) {
 		"nul byte":       {"command": "uptime\x00rm"},
 	} {
 		*argv = nil
-		if _, err := r.Call(context.Background(), "shell_read", args, false); !errors.Is(err, ErrBadArgument) {
+		if _, err := r.Call(context.Background(), "shell_read", args); !errors.Is(err, ErrBadArgument) {
 			t.Errorf("%s: err = %v, want a bad-argument refusal", name, err)
 		}
 		if *argv != nil {
 			t.Errorf("%s: something ran", name)
 		}
-	}
-}
-
-func TestASandboxToolMustBeARead(t *testing.T) {
-	_, err := New([]Tool{{Name: "w", Sandbox: true, Impact: ImpactOperate}}, &recorder{})
-	if err == nil {
-		t.Fatal("a sandbox tool at operate registered")
-	}
-	_, err = New([]Tool{{Name: "both", Sandbox: true, Argv: []string{"ls"}, Impact: ImpactRead}}, &recorder{})
-	if err == nil {
-		t.Fatal("a tool that is both a sandbox and a command registered")
 	}
 }
 
@@ -87,7 +69,7 @@ func TestASandboxedCommandsFailureIsItsResult(t *testing.T) {
 	r.run = func(ctx context.Context, argv []string, maxBytes int) ([]byte, error) {
 		return []byte("lsblk: /dev/sdz: not a block device"), errors.New("exit status 32")
 	}
-	out, err := r.Call(context.Background(), "shell_read", map[string]string{"command": "lsblk /dev/sdz"}, false)
+	out, err := r.Call(context.Background(), "shell_read", map[string]string{"command": "lsblk /dev/sdz"})
 	if err != nil {
 		t.Fatalf("Call: %v; a command's own failure must come back as output", err)
 	}

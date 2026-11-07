@@ -13,7 +13,7 @@
 // kinds exist:
 //
 //	ChannelCtl     — enrollment, heartbeat, kill switch
-//	ChannelTool    — AI plane: read-only tool calls, allowlist enforced agent-side
+//	ChannelTool    — AI plane: read-only tool calls, sandboxed agent-side
 //	ChannelConsole — human plane: recorded PTY / web proxy; the AI has no path here
 //
 // # The property this package exists to guarantee

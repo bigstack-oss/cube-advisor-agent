@@ -1,6 +1,5 @@
 // cube-advisor-agent is the on-cluster agent: it dials the SaaS outbound, serves
-// read-only tools from an allowlist it enforces itself, and (later) carries
-// recorded human consoles.
+// sandboxed reads through read-only brokers, and carries recorded consoles.
 //
 // It is released as a signed per-arch artifact and verified by CubeCOS before
 // it runs (ADR 0003); this repository never holds the signing key.
@@ -83,7 +82,7 @@ func usage() {
 
   enroll  -server <url> [-token <t> | -token-file <path> | -token-stdin] [-tunnel <host:port>]
   run     [-server <host:port>] [-dir <path>] [-audit <path>]
-  config  check [-dir <path>] [-probes]
+  config  check [-dir <path>]
   status
   version
 `, version)
