@@ -167,13 +167,58 @@ func TestHostListsProcessExecutables(t *testing.T) {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	body := string(b)
-	for _, want := range []string{"1\t0\tsystemd\t/usr/lib/systemd/systemd\tmnt:[4026531841]\n", "42\t1000\tx\t/tmp/x (deleted)\tmnt:[4026531841]\n"} {
+	for _, want := range []string{"1\t0\tsystemd\t/usr/lib/systemd/systemd\tmnt:[4026531841]\t\n", "42\t1000\tx\t/tmp/x (deleted)\tmnt:[4026531841]\t\n"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in\n%s", want, body)
 		}
 	}
 	if strings.Contains(body, "kthreadd") || strings.Contains(body, "secret-arg") {
 		t.Errorf("listed a kernel thread or a command line:\n%s", body)
+	}
+}
+
+// An interpreter's script is named, never its other arguments; inline code
+// is only marked.
+func TestHostNamesInterpreterScripts(t *testing.T) {
+	root, fsroot := t.TempDir(), t.TempDir()
+	for _, f := range []string{"tmp/a.py", "tmp/b.sh", "opt/run/c.pl", "tmp/x"} {
+		_ = os.MkdirAll(filepath.Join(fsroot, filepath.Dir(f)), 0o755)
+		_ = os.WriteFile(filepath.Join(fsroot, f), []byte("#"), 0o644)
+	}
+	mk := func(pid, exe, cwd string, argv ...string) {
+		d := filepath.Join(root, pid)
+		_ = os.MkdirAll(filepath.Join(d, "fd"), 0o755)
+		_ = os.WriteFile(filepath.Join(d, "cmdline"), []byte(strings.Join(argv, "\x00")+"\x00"), 0o644)
+		_ = os.Symlink(exe, filepath.Join(d, "exe"))
+		_ = os.Symlink(fsroot, filepath.Join(d, "root"))
+		_ = os.Symlink(cwd, filepath.Join(d, "cwd"))
+	}
+	mk("10", "/usr/bin/python3.9", "/", "python3", "-u", "-W", "ignore", "/tmp/a.py", "--token", "s3cret")
+	mk("11", "/usr/bin/bash", "/tmp", "bash", "b.sh", "s3cret")
+	mk("12", "/usr/bin/perl", "/", "perl", "-I", "/opt/lib", "/opt/run/c.pl")
+	mk("13", "/usr/bin/bash", "/", "bash", "-lc", "echo s3cret")
+	mk("14", "/usr/bin/python3.9", "/", "python3", "-c", "print('s3cret')")
+	mk("15", "/usr/bin/coreutils", "/", "/usr/bin/coreutils", "--coreutils-prog-shebang=sleep", "/tmp/x", "3600")
+	mk("16", "/usr/bin/bash", "/", "bash", "/tmp/gone.sh")
+	_ = os.Symlink("/tmp/gone.sh (deleted)", filepath.Join(root, "16", "fd", "255"))
+	mk("17", "/usr/bin/bash", "/", "bash", "/tmp/s3cret")
+	mk("18", "/usr/sbin/sshd", "/", "sshd", "/tmp/a.py")
+	mk("19", "/usr/bin/bash", "/", "bash")
+	got := map[string]string{}
+	for _, line := range strings.Split(string(listProcs(root)), "\n") {
+		if f := strings.Split(line, "\t"); len(f) == 6 {
+			got[f[0]] = f[5]
+		}
+	}
+	want := map[string]string{"10": "/tmp/a.py", "11": "/tmp/b.sh", "12": "/opt/run/c.pl", "13": "inline", "14": "inline",
+		"15": "/tmp/x", "16": "/tmp/gone.sh (deleted)", "17": "", "18": "", "19": ""}
+	for pid, w := range want {
+		if got[pid] != w {
+			t.Errorf("pid %s script = %q, want %q", pid, got[pid], w)
+		}
+	}
+	if strings.Contains(string(listProcs(root)), "s3cret") {
+		t.Errorf("an argument leaked:\n%s", listProcs(root))
 	}
 }
 

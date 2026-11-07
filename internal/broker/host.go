@@ -113,11 +113,12 @@ func LocalHostRun(ctx context.Context, name string, args []string) ([]byte, []by
 	return out.Bytes(), errOut.Bytes(), err
 }
 
-// listProcs reports every process as "pid<TAB>uid<TAB>comm<TAB>exe<TAB>mntns",
-// exe being /proc/PID/exe's target (a deleted file keeps its " (deleted)"
-// suffix; a kernel thread has none) and mntns its mount namespace, so a
-// reader can tell a container's paths from the host's. Never the command
-// line, which can carry credentials.
+// listProcs reports every process as
+// "pid<TAB>uid<TAB>comm<TAB>exe<TAB>mntns<TAB>script", exe being
+// /proc/PID/exe's target (a deleted file keeps its " (deleted)" suffix; a
+// kernel thread has none), mntns its mount namespace, so a reader can tell a
+// container's paths from the host's, and script the file an interpreter runs
+// (see scriptOf). Never the command line, which can carry credentials.
 func listProcs(root string) []byte {
 	if root == "" {
 		root = "/proc"
@@ -147,11 +148,102 @@ func listProcs(root string) []byte {
 			}
 		}
 		ns, _ := os.Readlink(filepath.Join(root, pid, "ns", "mnt"))
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\n", pid, uid, strings.TrimSpace(string(comm)), exe, ns)
+		script := scriptOf(filepath.Join(root, pid), exe)
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%s\n", pid, uid, strings.TrimSpace(string(comm)), exe, ns, script)
 		if b.Len() > MaxResponse {
 			b.WriteString("[broker: answer cut]\n")
 			break
 		}
 	}
 	return b.Bytes()
+}
+
+// interpreter matches the executables that run a script named on their
+// command line, and the letters of the options that make them run code
+// given inline or on stdin instead.
+var interpreters = []struct {
+	name   *regexp.Regexp
+	inline string
+}{
+	{regexp.MustCompile(`^(ba|da|z|k|a)?sh$`), "cs"},
+	{regexp.MustCompile(`^python[0-9.]*$`), "cm"},
+	{regexp.MustCompile(`^perl[0-9.]*$`), "eE"},
+	{regexp.MustCompile(`^ruby[0-9.]*$`), "e"},
+	{regexp.MustCompile(`^(node|nodejs)$`), "ep"},
+	{regexp.MustCompile(`^php[0-9.]*$`), "r"},
+	{regexp.MustCompile(`^coreutils$`), ""},
+}
+
+// valueOpts take their value as the next argument.
+var valueOpts = map[string]bool{"-W": true, "-X": true, "-o": true, "-O": true, "+O": true, "+o": true,
+	"-I": true, "-r": true, "--require": true, "-d": true, "--rcfile": true, "--init-file": true}
+
+// scriptOf names the file an interpreter process runs: "inline" for code
+// given on the command line or stdin, else the first non-option argument,
+// made absolute against the process's working directory, and only when that
+// is a file the process can see (" (deleted)" when it holds it open but it
+// is gone). Empty for any other process. No other argument is read out.
+func scriptOf(dir, exe string) string {
+	base := filepath.Base(strings.TrimSuffix(exe, " (deleted)"))
+	inline := ""
+	found := false
+	for _, in := range interpreters {
+		if in.name.MatchString(base) {
+			inline, found = in.inline, true
+			break
+		}
+	}
+	if !found {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "cmdline"))
+	if err != nil {
+		return ""
+	}
+	argv := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+	arg := ""
+	for i := 1; i < len(argv); i++ {
+		a := argv[i]
+		if a == "--" {
+			if i+1 < len(argv) {
+				arg = argv[i+1]
+			}
+			break
+		}
+		if a == "-" {
+			return "inline"
+		}
+		if strings.HasPrefix(a, "-") || strings.HasPrefix(a, "+") {
+			if !strings.HasPrefix(a, "--") && strings.ContainsAny(strings.TrimLeft(a[1:], "-"), inline) && inline != "" {
+				return "inline"
+			}
+			if valueOpts[a] {
+				i++
+			}
+			continue
+		}
+		arg = a
+		break
+	}
+	if arg == "" || strings.ContainsAny(arg, "\t\n") {
+		return ""
+	}
+	if !filepath.IsAbs(arg) {
+		cwd, err := os.Readlink(filepath.Join(dir, "cwd"))
+		if err != nil {
+			return ""
+		}
+		arg = filepath.Join(cwd, arg)
+	}
+	arg = filepath.Clean(arg)
+	if st, err := os.Stat(filepath.Join(dir, "root", arg)); err == nil && st.Mode().IsRegular() {
+		return arg
+	}
+	fds, _ := os.ReadDir(filepath.Join(dir, "fd"))
+	for _, fd := range fds {
+		if t, _ := os.Readlink(filepath.Join(dir, "fd", fd.Name())); t == arg+" (deleted)" {
+			return t
+		}
+	}
+	return ""
 }
