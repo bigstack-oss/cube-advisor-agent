@@ -94,3 +94,18 @@ func mustReadLevel(t *testing.T, dir string) toolplane.Level {
 type nopAuditor struct{}
 
 func (nopAuditor) RecordToolCall(toolplane.ToolCall) {}
+
+func TestHelloCarriesTheCapabilities(t *testing.T) {
+	reg, err := toolplane.New(nil, nopAuditor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { capabilities = nil }()
+	if got := helloFor("c", "f", reg).Capabilities; len(got) != 0 {
+		t.Fatalf("Capabilities = %v before any are set", got)
+	}
+	capabilities = []string{tunnelproto.ConsoleRelay}
+	if got := helloFor("c", "f", reg).Capabilities; len(got) != 1 || got[0] != "console-relay" {
+		t.Fatalf("Capabilities = %v, want [console-relay]", got)
+	}
+}

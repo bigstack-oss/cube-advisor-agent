@@ -128,6 +128,13 @@ func runCmd(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// A node that reads its peers also relays consoles to them (ADR 0021).
+	cons := &console.Handler{NodeID: id.NodeID}
+	if broker.PeerReadsAvailable() {
+		cons.Peers = broker.LocalNodes
+		cons.Audit = relayAuditor(auditor)
+		capabilities = []string{tunnelproto.ConsoleRelay}
+	}
 	hello := helloFor(id.ClusterID, fp, reg)
 	url := "wss://" + serverAddr + tunnel.WSPath
 	httpClient := tunnel.NewTLSClient(tlsCfg)
@@ -150,7 +157,7 @@ func runCmd(args []string) int {
 	// node id a compromised SaaS could pick.
 	srv := &agent.Server{
 		Tools:   reg,
-		Console: &console.Handler{NodeID: id.NodeID},
+		Console: cons,
 		Web:     &console.WebHandler{Allow: console.FileAllowlist{Path: *webTargets}},
 	}
 	backoff := tunnel.DefaultBackoff()
@@ -254,6 +261,18 @@ func helloFor(clusterID, fingerprint string, reg *toolplane.Registry) tunnelprot
 		ServedConsent:   reg.Consent().String(),
 		Brokers:         servedBrokers,
 		NodeRole:        nodeRole(),
+		Capabilities:    capabilities,
+	}
+}
+
+// capabilities is set once the console handler is built.
+var capabilities []string
+
+// relayAuditor records console relay opens in the tool-call log.
+func relayAuditor(a toolplane.Auditor) func(string, bool, string) {
+	return func(node string, allowed bool, reason string) {
+		a.RecordToolCall(toolplane.ToolCall{At: time.Now().UTC(), Tool: "console-relay",
+			Args: map[string]string{"node": node}, Allowed: allowed, Reason: reason})
 	}
 }
 

@@ -89,7 +89,15 @@ type Hello struct {
 	// NodeRole is this node's CubeCOS role (cubesys.role), e.g. "control" or
 	// "compute"; empty from older agents and non-CubeCOS hosts.
 	NodeRole string `json:"nodeRole,omitempty"`
+
+	// Capabilities names optional features this agent serves, e.g.
+	// ConsoleRelay; empty from older agents.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
+
+// ConsoleRelay in Hello.Capabilities says the agent accepts a console channel
+// naming another node on the cluster's node list (ADR 0021).
+const ConsoleRelay = "console-relay"
 
 // PeerReadsBroker in Hello.Brokers says host-ro also reads the cluster's
 // other nodes over their node-to-node SSH (host-ro --node NODE VIEW).
