@@ -7,6 +7,9 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
@@ -27,8 +30,10 @@ var enrollPeersCmd = func(ctx context.Context, out io.Writer) error {
 }
 
 // enrollPeersOnce enrols the cluster's other nodes the first time this node is
-// admitted after enrolling. One attempt: each peer lands on the Advisor's
-// enrolment page to verify, and `advisor enroll` with no token retries.
+// admitted after enrolling. advisor_enroll_peers may enrol only one peer per
+// run, so it is re-run while the count of unenrolled peers it reports falls;
+// that count bounds the passes. Each peer lands on the Advisor's enrolment
+// page to verify, and `advisor enroll` with no token retries.
 func enrollPeersOnce(ctx context.Context, dir string) {
 	if !identity.TakePeersPending(dir) {
 		return
@@ -38,23 +43,58 @@ func enrollPeersOnce(ctx context.Context, dir string) {
 		return
 	}
 	log.Printf("agent: peers: admitted; enrolling this cluster's other nodes")
+	prev := -1
+	for pass := 1; ; pass++ {
+		log.Printf("agent: peers: pass %d", pass)
+		pending, err := enrollPeersPass(ctx)
+		switch {
+		case pending == 0:
+			log.Printf("agent: peers: done; verify each new node on the Advisor's enrolment page")
+			return
+		case pending < 0 && err != nil:
+			log.Printf("agent: peers: fan-out did not complete: %v; run `advisor enroll` with no token to retry", err)
+			return
+		case pending < 0:
+			log.Printf("agent: peers: done; verify each new node on the Advisor's enrolment page")
+			return
+		case prev >= 0 && pending >= prev:
+			log.Printf("agent: peers: %d node(s) still not enrolled; run `advisor enroll` with no token to retry", pending)
+			return
+		}
+		prev = pending
+	}
+}
+
+// enrollPeersPass runs advisor_enroll_peers once, logging its output. It
+// returns how many peers were unenrolled when it started: 0 when all were,
+// -1 when the output did not say.
+func enrollPeersPass(ctx context.Context) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, peersTimeout)
 	defer cancel()
 	pr, pw := io.Pipe()
+	pending := -1
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		sc := bufio.NewScanner(pr)
 		for sc.Scan() {
-			log.Printf("agent: peers: %s", sc.Text())
+			line := sc.Text()
+			log.Printf("agent: peers: %s", line)
+			if m := enrollingRE.FindStringSubmatch(line); m != nil {
+				pending, _ = strconv.Atoi(m[1])
+			} else if strings.HasPrefix(line, allEnrolled) {
+				pending = 0
+			}
 		}
+		_, _ = io.Copy(io.Discard, pr)
 	}()
 	err := enrollPeersCmd(ctx, pw)
 	pw.Close()
 	<-done
-	if err != nil {
-		log.Printf("agent: peers: fan-out did not complete: %v; run `advisor enroll` with no token to retry", err)
-		return
-	}
-	log.Printf("agent: peers: done; verify each new node on the Advisor's enrolment page")
+	return pending, err
 }
+
+// What advisor_enroll_peers prints before and instead of a fan-out.
+var enrollingRE = regexp.MustCompile(`^Enrolling (\d+) node\(s\):`)
+
+const allEnrolled = "Every node of this cluster is already enrolled."

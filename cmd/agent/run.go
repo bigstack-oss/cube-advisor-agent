@@ -250,6 +250,7 @@ func helloFor(clusterID, fingerprint string, reg *toolplane.Registry) tunnelprot
 		ServedLevel:     reg.Level().String(),
 		ServedConsent:   reg.Consent().String(),
 		Brokers:         servedBrokers,
+		NodeRole:        nodeRole(),
 	}
 }
 

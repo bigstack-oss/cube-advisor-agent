@@ -218,3 +218,15 @@ func TestHelloServedFieldsWireNames(t *testing.T) {
 		t.Errorf("unset served fields must be omitted: %s", b)
 	}
 }
+
+// An agent that reports no role predates the field and counts as control.
+func TestIsControlRole(t *testing.T) {
+	for role, want := range map[string]bool{
+		"": true, "control": true, "control-converged": true, "edge-core": true, "moderator": true,
+		"control-network": true, "compute": false, "storage": false, "undef": false,
+	} {
+		if got := IsControlRole(role); got != want {
+			t.Errorf("IsControlRole(%q) = %v, want %v", role, got, want)
+		}
+	}
+}

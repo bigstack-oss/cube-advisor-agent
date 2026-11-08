@@ -85,6 +85,20 @@ type Hello struct {
 	// Brokers names the read brokers the sandbox can call (ADR 0019), e.g.
 	// ["prom", "ceph-ro"]; empty from an agent without them.
 	Brokers []string `json:"brokers,omitempty"`
+
+	// NodeRole is this node's CubeCOS role (cubesys.role), e.g. "control" or
+	// "compute"; empty from older agents and non-CubeCOS hosts.
+	NodeRole string `json:"nodeRole,omitempty"`
+}
+
+// IsControlRole reports whether a node of this role can answer cluster-wide
+// tools. Empty (older agent, unknown host) counts as control.
+func IsControlRole(role string) bool {
+	switch role {
+	case "", "control", "control-network", "control-converged", "edge-core", "moderator":
+		return true
+	}
+	return false
 }
 
 // HelloAck is the SaaS's response. Accepted=false carries an operator-readable
