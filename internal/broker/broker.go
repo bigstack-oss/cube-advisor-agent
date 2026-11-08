@@ -51,6 +51,13 @@ type Server struct {
 	HostRun func(ctx context.Context, name string, args []string) (stdout, stderr []byte, err error)
 	// ProcRoot is where /procs reads processes; "" means /proc.
 	ProcRoot string
+	// ScriptRun runs a fixed view script here (node "") or on a peer; nil
+	// means RunScript.
+	ScriptRun func(ctx context.Context, node, script string, args []string) (stdout, stderr []byte, err error)
+	// Nodes lists the cluster's node names; nil means LocalNodes.
+	Nodes func(ctx context.Context) ([]string, error)
+	// Hostname names this node; nil means os.Hostname.
+	Hostname func() (string, error)
 	// OpenStack backs os-ro; nil refuses its calls.
 	OpenStack OpenStackSource
 	Client    *http.Client
@@ -58,6 +65,10 @@ type Server struct {
 	mu      sync.Mutex
 	table   []CephCommand
 	tableAt time.Time
+
+	nodesMu sync.Mutex
+	nodes   []string
+	nodesAt time.Time
 }
 
 // Start creates the directory, the client commands and the sockets, and
@@ -292,18 +303,26 @@ python3 -c 'import json,sys; print(json.dumps({"args": sys.argv[1:]}))' "$@" |
 `
 	host := `#!/bin/sh
 # host-ro: the host's state the sandbox cannot see (ADR 0019).
+#   host-ro [--node NODE] VIEW [ARG]   NODE is another node of the cluster, read over its SSH
 #   host-ro sockets [PORT]  listening TCP/UDP sockets on the host, optionally one local port
 #   host-ro unit NAME       a systemd unit's state, e.g. host-ro unit sshd
-#   host-ro procs           every process: pid, uid, name, executable path, mount ns
+#   host-ro procs           every process: pid, uid, name, executable path, mount ns, script
 #   host-ro failed          the failed systemd units
+#   host-ro errlog          error-priority journal lines per day and unit, last 7 days
+#   host-ro oom             the kernel's OOM kills, last 25 h
+#   host-ro logsize         df, big logs written today, /var/log's size
+#   host-ro unowned         running executables and scripts no package owns
+#   host-ro nodes           the cluster's nodes, this one marked self
 S=` + dir + `/host.sock
 H="` + CallHeader + `: ${ADVISOR_CALL_ID:-}"
+N=""
+if [ "$1" = "--node" ]; then N="$2"; shift 2; fi
+c() { p="$1"; shift; curl -sS --unix-socket "$S" -H "$H" -G "http://broker/$p" ${N:+--data-urlencode "node=$N"} "$@"; }
 case "$1" in
-  sockets) curl -sS --unix-socket "$S" -H "$H" -G http://broker/sockets ${2:+--data-urlencode "port=$2"} ;;
-  procs) curl -sS --unix-socket "$S" -H "$H" http://broker/procs ;;
-  failed) curl -sS --unix-socket "$S" -H "$H" http://broker/failed ;;
-  unit) curl -sS --unix-socket "$S" -H "$H" -G http://broker/unit --data-urlencode "name=$2" ;;
-  *) sed -n '2,6p' "$0" >&2; exit 2 ;;
+  sockets) c sockets ${2:+--data-urlencode "port=$2"} ;;
+  procs|failed|errlog|oom|logsize|unowned|nodes) c "$1" ;;
+  unit) c unit --data-urlencode "name=$2" ;;
+  *) sed -n '2,13p' "$0" >&2; exit 2 ;;
 esac
 `
 	osro := `#!/bin/sh

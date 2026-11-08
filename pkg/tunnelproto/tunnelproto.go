@@ -91,6 +91,14 @@ type Hello struct {
 	NodeRole string `json:"nodeRole,omitempty"`
 }
 
+// PeerReadsBroker in Hello.Brokers says host-ro also reads the cluster's
+// other nodes over their node-to-node SSH (host-ro --node NODE VIEW).
+const PeerReadsBroker = "host-ro-peers"
+
+// PeerUnreachable starts a peer read's answer when the node could not be
+// reached.
+const PeerUnreachable = "peer not reachable"
+
 // IsControlRole reports whether a node of this role can answer cluster-wide
 // tools. Empty (older agent, unknown host) counts as control.
 func IsControlRole(role string) bool {

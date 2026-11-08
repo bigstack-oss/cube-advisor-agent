@@ -97,6 +97,9 @@ func runCmd(args []string) int {
 	} else {
 		toolplane.SandboxBrokerDir = broker.DefaultDir
 		servedBrokers = []string{"prom", "ceph-ro", "host-ro"}
+		if broker.PeerReadsAvailable() {
+			servedBrokers = append(servedBrokers, tunnelproto.PeerReadsBroker)
+		}
 		if brk.OpenStack != nil {
 			servedBrokers = append(servedBrokers, "os-ro")
 		}

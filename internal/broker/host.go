@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,9 +11,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
 )
 
 // unitName is a systemd unit name: letters, digits and @._:- only, so it
@@ -25,7 +29,9 @@ const unitProps = "Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,ExecM
 // host serves fixed views of the host the sandbox cannot see: its listening
 // sockets (the sandbox has no network namespace of its own to look at), its
 // processes' executables (the sandbox may not resolve /proc/PID/exe), the
-// failed units and one unit's state (systemd's socket is hidden).
+// failed units and one unit's state (systemd's socket is hidden). With
+// node=NAME, a node in the cluster's own node list, it runs the same fixed
+// view on that node over the cluster's node-to-node SSH.
 func (s *Server) host(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	args := map[string]string{"path": r.URL.Path}
@@ -41,10 +47,15 @@ func (s *Server) host(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusBadRequest, "malformed query: "+err.Error())
 		return
 	}
+	view := strings.TrimPrefix(r.URL.Path, "/")
+	node := r.URL.Query().Get("node")
+	if node != "" {
+		args["node"] = node
+	}
 	var name string
-	var argv []string
-	switch r.URL.Path {
-	case "/sockets":
+	var argv, vargs []string
+	switch view {
+	case "sockets":
 		name, argv = "ss", []string{"-H", "-l", "-t", "-u", "-n", "-p"}
 		if p := r.URL.Query().Get("port"); p != "" {
 			args["port"] = p
@@ -54,15 +65,12 @@ func (s *Server) host(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			argv = append(argv, "sport", "=", ":"+p)
+			vargs = []string{p}
 		}
-	case "/procs":
-		s.record(r, "broker:host", args, true, "", started, 0)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(listProcs(s.ProcRoot))
-		return
-	case "/failed":
+	case "procs", "errlog", "oom", "logsize", "unowned":
+	case "failed":
 		name, argv = "systemctl", []string{"list-units", "--state=failed", "--no-legend", "--plain", "--no-pager"}
-	case "/unit":
+	case "unit":
 		u := r.URL.Query().Get("name")
 		args["unit"] = u
 		if !unitName.MatchString(u) {
@@ -70,23 +78,78 @@ func (s *Server) host(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		name, argv = "systemctl", []string{"show", "--no-pager", "-p", unitProps, "--", u}
+		vargs = []string{u}
+	case "nodes":
+		if node != "" {
+			refuse(http.StatusBadRequest, "nodes is read on this node only")
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), CallTimeout)
+		defer cancel()
+		out, err := s.nodesView(ctx)
+		if err != nil {
+			refuse(http.StatusBadGateway, err.Error())
+			return
+		}
+		s.record(r, "broker:host", args, true, "", started, len(out))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(out)
+		return
 	default:
-		refuse(http.StatusNotFound, "only /sockets, /procs, /failed and /unit?name=UNIT are served")
+		refuse(http.StatusNotFound, "only /sockets, /procs, /failed, /unit?name=UNIT, /errlog, /oom, /logsize, /unowned and /nodes are served")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), CallTimeout)
-	defer cancel()
-	run := s.HostRun
-	if run == nil {
-		run = LocalHostRun
+	if node != "" {
+		ctx, cancel := context.WithTimeout(r.Context(), CallTimeout)
+		nodes, err := s.clusterNodes(ctx)
+		cancel()
+		if err != nil {
+			refuse(http.StatusBadGateway, "reading the node list: "+err.Error())
+			return
+		}
+		if !hostName.MatchString(node) || !slices.Contains(nodes, node) {
+			refuse(http.StatusForbidden, "node "+node+" is not in this cluster's node list")
+			return
+		}
 	}
-	out, errOut, err := run(ctx, name, argv)
+	if view == "procs" && node == "" {
+		out := listProcs(s.ProcRoot)
+		s.record(r, "broker:host", args, true, "", started, len(out))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(out)
+		return
+	}
+	timeout := CallTimeout
+	if node != "" {
+		timeout = PeerTimeout
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+	var out, errOut []byte
+	var err error
+	if name != "" && node == "" {
+		run := s.HostRun
+		if run == nil {
+			run = LocalHostRun
+		}
+		out, errOut, err = run(ctx, name, argv)
+	} else {
+		run := s.ScriptRun
+		if run == nil {
+			run = RunScript
+		}
+		out, errOut, err = run(ctx, node, viewScripts[view], vargs)
+	}
 	out = trimLines(out)
 	if len(out) > MaxResponse {
 		out = append(out[:MaxResponse], fmt.Sprintf("\n[broker: answer cut at %d bytes]\n", MaxResponse)...)
 	}
 	reason, code := "", http.StatusOK
-	if err != nil {
+	switch {
+	case errors.Is(err, errUnreachable):
+		reason, code = fmt.Sprintf("%s: %s: %s", tunnelproto.PeerUnreachable, node, bytes.TrimSpace(errOut)), http.StatusBadGateway
+		out = []byte(reason + "\n")
+	case err != nil:
 		reason, code = err.Error(), http.StatusBadGateway
 		out = append(out, errOut...)
 	}

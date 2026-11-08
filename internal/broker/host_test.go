@@ -177,9 +177,9 @@ func TestHostListsProcessExecutables(t *testing.T) {
 	}
 }
 
-// An interpreter's script is named, never its other arguments; inline code
-// is only marked.
-func TestHostNamesInterpreterScripts(t *testing.T) {
+// interpreterFixture is a fake /proc of interpreters and other processes.
+func interpreterFixture(t *testing.T) string {
+	t.Helper()
 	root, fsroot := t.TempDir(), t.TempDir()
 	for _, f := range []string{"tmp/a.py", "tmp/b.sh", "opt/run/c.pl", "tmp/x"} {
 		_ = os.MkdirAll(filepath.Join(fsroot, filepath.Dir(f)), 0o755)
@@ -204,6 +204,13 @@ func TestHostNamesInterpreterScripts(t *testing.T) {
 	mk("17", "/usr/bin/bash", "/", "bash", "/tmp/s3cret")
 	mk("18", "/usr/sbin/sshd", "/", "sshd", "/tmp/a.py")
 	mk("19", "/usr/bin/bash", "/", "bash")
+	return root
+}
+
+// An interpreter's script is named, never its other arguments; inline code
+// is only marked.
+func TestHostNamesInterpreterScripts(t *testing.T) {
+	root := interpreterFixture(t)
 	got := map[string]string{}
 	for _, line := range strings.Split(string(listProcs(root)), "\n") {
 		if f := strings.Split(line, "\t"); len(f) == 6 {
