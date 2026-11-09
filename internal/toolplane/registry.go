@@ -164,6 +164,9 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 		return nil, fmt.Errorf("%w: %q", ErrUnknownTool, name)
 	}
 
+	if tool.Local != nil {
+		return r.callLocal(ctx, tool, args)
+	}
 	command, err := sandboxCommand(args)
 	if err != nil {
 		r.audit.RecordToolCall(ToolCall{
@@ -205,6 +208,24 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]string
 	if runErr != nil {
 		out = append(out, fmt.Sprintf("\n[%v]\n", runErr)...)
 	}
+	return out, nil
+}
+
+// callLocal serves a tool the agent answers itself, audited the same way.
+func (r *Registry) callLocal(ctx context.Context, tool Tool, args map[string]string) ([]byte, error) {
+	timeout := r.timeoutFor(tool)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	started := time.Now()
+	out, err := tool.Local(ctx, args)
+	rec := ToolCall{Tool: tool.Name, Args: args, Allowed: err == nil,
+		At: started.UTC(), Duration: time.Since(started), Bytes: len(out)}
+	if err != nil {
+		rec.Reason = err.Error()
+		r.audit.RecordToolCall(rec)
+		return nil, fmt.Errorf("%w: %v", ErrBadArgument, err)
+	}
+	r.audit.RecordToolCall(rec)
 	return out, nil
 }
 

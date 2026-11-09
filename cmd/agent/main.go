@@ -68,6 +68,8 @@ func dispatch(args []string) int {
 		return configCmd(args[1:])
 	case "status":
 		return statusCmd(args[1:])
+	case "job":
+		return jobCmd(args[1:])
 	case "version", "-version", "--version":
 		fmt.Printf("cube-advisor-agent %s (%s)\n", version, commit)
 		return exitOK
@@ -84,6 +86,7 @@ func usage() {
   run     [-server <host:port>] [-dir <path>] [-audit <path>]
   config  check [-dir <path>]
   status
+  job     start|status|stop|list
   version
 `, version)
 }

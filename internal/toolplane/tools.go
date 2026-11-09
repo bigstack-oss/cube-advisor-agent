@@ -1,6 +1,7 @@
-// Package toolplane serves the AI plane's one tool, shell_read: a command run
-// in ADR 0018's read-only sandbox, reaching data only through the read
-// brokers (ADR 0019). Writes go through the recorded console instead.
+// Package toolplane serves the AI plane's tools: shell_read, a command run in
+// ADR 0018's read-only sandbox reaching data only through the read brokers
+// (ADR 0019), and the status and stop calls of background jobs. Writes,
+// starting a job included, go through the recorded console instead.
 //
 // Every call, served or refused, is written to a local append-only log the
 // customer can read. The node's action level and consent files are still read
@@ -8,6 +9,7 @@
 package toolplane
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -22,6 +24,10 @@ type Tool struct {
 
 	// Sandbox runs the caller's command text in SandboxArgvFor's sandbox.
 	Sandbox bool
+
+	// Local serves the call in the agent itself, running no caller text:
+	// the background-job status and stop calls.
+	Local func(ctx context.Context, args map[string]string) ([]byte, error)
 
 	// MaxOutputBytes caps one call's output. Zero means the registry default.
 	MaxOutputBytes int
@@ -47,8 +53,8 @@ func (t Tool) validate() error {
 	if t.Name == "" {
 		return fmt.Errorf("tool has no name")
 	}
-	if !t.Sandbox {
-		return fmt.Errorf("tool %q is not a sandbox tool; the sandbox is the only tool kind", t.Name)
+	if t.Sandbox == (t.Local != nil) {
+		return fmt.Errorf("tool %q must be exactly one of a sandbox tool or a local one", t.Name)
 	}
 	if t.Timeout < 0 {
 		return fmt.Errorf("tool %q has a negative timeout", t.Name)

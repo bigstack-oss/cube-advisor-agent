@@ -107,7 +107,10 @@ func runCmd(args []string) int {
 	// Every per-cluster setting the operator configured, through the one path
 	// that reads them (ADR 0016). A setting absent from that list does not
 	// exist, which is what stops the next one shipping unwired.
-	reg, states, err := configure(*dir, toolplane.Tools, auditor)
+	// Background jobs: followed and stopped over the tool plane, started
+	// through the recorded shell, deadlines enforced here too.
+	jobs := &toolplane.Jobs{Dir: toolplane.DefaultJobsDir}
+	reg, states, err := configure(*dir, append(append([]toolplane.Tool{}, toolplane.Tools...), toolplane.JobTools(jobs)...), auditor)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return exitFailed
@@ -127,6 +130,7 @@ func runCmd(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go jobs.Sweep(ctx)
 
 	// A node that reads its peers also relays consoles to them (ADR 0021).
 	cons := &console.Handler{NodeID: id.NodeID}
@@ -135,6 +139,7 @@ func runCmd(args []string) int {
 		cons.Audit = relayAuditor(auditor)
 		capabilities = []string{tunnelproto.ConsoleRelay}
 	}
+	capabilities = append(capabilities, tunnelproto.JobsCapability)
 	hello := helloFor(id.ClusterID, fp, reg)
 	url := "wss://" + serverAddr + tunnel.WSPath
 	httpClient := tunnel.NewTLSClient(tlsCfg)
