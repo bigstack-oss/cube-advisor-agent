@@ -217,3 +217,30 @@ func TestJobStartCommandRoundTrips(t *testing.T) {
 		t.Fatalf("line = %s", line)
 	}
 }
+
+// systemd-run expands $$ to $ (and $VAR, %x specifiers) in a unit's argv;
+// the spawn argv must carry none of them.
+func TestJobArgvSurvivesSystemdExpansion(t *testing.T) {
+	var got []string
+	j := &Jobs{Dir: t.TempDir(), StopGrace: time.Second,
+		Spawn: func(_ string, argv []string) (string, error) {
+			got = argv
+			for i, a := range argv {
+				if strings.ContainsAny(a, "$%") {
+					t.Errorf("spawn argv[%d] has $ or %%: %q", i, a)
+				}
+				argv[i] = strings.ReplaceAll(a, "$$", "$")
+			}
+			return "", SetsidSpawn(argv)
+		}}
+	if _, err := j.Start("j-sysd", "sleep 0.3", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("spawn not called")
+	}
+	if pg := pgidOf(t, j, "j-sysd"); pg <= 0 {
+		t.Fatalf("pgid = %d, want the leader's pid", pg)
+	}
+	waitState(t, j, "j-sysd", tunnelproto.JobExited)
+}

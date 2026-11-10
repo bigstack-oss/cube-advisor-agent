@@ -132,7 +132,11 @@ func (j *Jobs) Start(id, command string, deadline time.Time) (tunnelproto.JobSta
 	if spawn == nil {
 		spawn = DefaultSpawn(deadline)
 	}
-	unit, err := spawn(id, []string{"/bin/bash", "-c", jobScript, "advisor-job", j.path(id)})
+	// The wrapper goes in a file: systemd rewrites $ and % in a unit's argv.
+	if err := os.WriteFile(j.path(id, "run"), []byte(jobScript), 0o700); err != nil {
+		return tunnelproto.JobStatus{}, err
+	}
+	unit, err := spawn(id, []string{"/bin/bash", j.path(id, "run"), j.path(id)})
 	if err != nil {
 		_ = j.writeEnd(id, jobEnd{State: tunnelproto.JobLost, At: now})
 		return tunnelproto.JobStatus{}, fmt.Errorf("start job: %w", err)
