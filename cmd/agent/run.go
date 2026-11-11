@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"os/user"
 	"syscall"
 	"time"
 
@@ -42,8 +43,16 @@ func runCmd(args []string) int {
 		"JSON map of symbolic web target names to host:port this node may proxy; absent means none")
 	consoleCA := fs.String("console-ca", identity.TrustedConsoleCAPath,
 		"console CA sshd trusts; replaced on rotation only if it already exists")
+	consoleAccount := fs.String("console-account", DefaultConsoleAccount,
+		"login account of recorded console sessions; its home directory is created if missing")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
+	}
+	// sshd warns on every command when the account has no home directory.
+	if home, err := ensureConsoleHome(*consoleAccount, user.Lookup); err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v\n", err)
+	} else if home != "" {
+		fmt.Fprintf(os.Stderr, "run: created %s, the console account's home directory\n", home)
 	}
 
 	serverAddr, err := resolveServerAddr(*addr, *dir)
