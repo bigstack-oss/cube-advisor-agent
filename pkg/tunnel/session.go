@@ -262,6 +262,10 @@ func (s *Session) AwaitKillSwitch() (tunnelproto.KillSwitch, error) {
 // sessions, which is the point: a kill switch that waits politely is not one.
 func (s *Session) Close() error { return s.mux.Close() }
 
+// Ping measures one round trip with yamux's built-in ping frame. It adds
+// nothing to the wire protocol.
+func (s *Session) Ping() (time.Duration, error) { return s.mux.Ping() }
+
 // IsClosed reports whether the session has gone away.
 func (s *Session) IsClosed() bool { return s.mux.IsClosed() }
 

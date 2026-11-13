@@ -361,3 +361,21 @@ func TestChannelHeaderAndPayloadInOneWriteBothSurvive(t *testing.T) {
 		t.Errorf("payload = %q", buf)
 	}
 }
+
+// Either side can time a round trip; a closed session cannot.
+func TestPingTimesARoundTrip(t *testing.T) {
+	agent, saas, err := pair(t, goodHello(), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	for _, s := range []*Session{saas, agent} {
+		if d, err := s.Ping(); err != nil || d <= 0 {
+			t.Errorf("ping = %v, %v", d, err)
+		}
+	}
+	agent.Close()
+	saas.Close()
+	if _, err := saas.Ping(); err == nil {
+		t.Error("ping on a closed session succeeded")
+	}
+}
