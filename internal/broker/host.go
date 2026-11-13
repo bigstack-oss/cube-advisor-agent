@@ -67,7 +67,7 @@ func (s *Server) host(w http.ResponseWriter, r *http.Request) {
 			argv = append(argv, "sport", "=", ":"+p)
 			vargs = []string{p}
 		}
-	case "procs", "errlog", "oom", "logsize", "unowned":
+	case "procs", "errlog", "oom", "logsize", "unowned", "facts":
 	case "failed":
 		name, argv = "systemctl", []string{"list-units", "--state=failed", "--no-legend", "--plain", "--no-pager"}
 	case "unit":
@@ -96,7 +96,7 @@ func (s *Server) host(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(out)
 		return
 	default:
-		refuse(http.StatusNotFound, "only /sockets, /procs, /failed, /unit?name=UNIT, /errlog, /oom, /logsize, /unowned and /nodes are served")
+		refuse(http.StatusNotFound, "only /sockets, /procs, /failed, /unit?name=UNIT, /errlog, /oom, /logsize, /unowned, /facts and /nodes are served")
 		return
 	}
 	if node != "" {

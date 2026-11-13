@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bigstack-oss/cube-advisor-agent/pkg/facts"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
 )
 
@@ -73,7 +74,7 @@ func get(t *testing.T, c *http.Client, url string) (int, string) {
 func TestHostRunsTheSameViewOnAPeer(t *testing.T) {
 	audit, dir, ran := startPeers(t)
 	c := unixClient(filepath.Join(dir, "host.sock"))
-	for _, u := range []string{"failed", "procs", "errlog", "oom", "logsize", "unowned", "sockets?port=22", "unit?name=sshd"} {
+	for _, u := range []string{"failed", "procs", "errlog", "oom", "logsize", "unowned", "facts", "sockets?port=22", "unit?name=sshd"} {
 		sep := "?"
 		if strings.Contains(u, "?") {
 			sep = "&"
@@ -84,7 +85,7 @@ func TestHostRunsTheSameViewOnAPeer(t *testing.T) {
 		}
 	}
 	got := ran.all()
-	views := []string{"failed", "procs", "errlog", "oom", "logsize", "unowned", "sockets", "unit"}
+	views := []string{"failed", "procs", "errlog", "oom", "logsize", "unowned", "facts", "sockets", "unit"}
 	if len(got) != len(views) {
 		t.Fatalf("ran %d scripts, want %d", len(got), len(views))
 	}
@@ -93,8 +94,8 @@ func TestHostRunsTheSameViewOnAPeer(t *testing.T) {
 			t.Errorf("%s ran %+v", v, got[i])
 		}
 	}
-	if strings.Join(got[6].args, " ") != "22" || strings.Join(got[7].args, " ") != "sshd" || len(got[0].args) != 0 {
-		t.Errorf("arguments: %v %v %v", got[0].args, got[6].args, got[7].args)
+	if strings.Join(got[7].args, " ") != "22" || strings.Join(got[8].args, " ") != "sshd" || len(got[0].args) != 0 || len(got[6].args) != 0 {
+		t.Errorf("arguments: %v %v %v %v", got[0].args, got[6].args, got[7].args, got[8].args)
 	}
 	audit.mu.Lock()
 	defer audit.mu.Unlock()
@@ -176,8 +177,20 @@ func TestHostClientPassesTheNode(t *testing.T) {
 	if !strings.HasPrefix(string(out), tunnelproto.PeerUnreachable) {
 		t.Fatalf("host-ro --node cube-c oom: %q", out)
 	}
-	if got := ran.all(); len(got) != 2 || got[0].args[0] != "22" || got[1].script != viewScripts["oom"] {
+	out, err = exec.Command(hostro, "--node", "cube-b", "facts").CombinedOutput()
+	if err != nil || string(out) != "read on cube-b\n" {
+		t.Fatalf("host-ro --node cube-b facts: %q %v", out, err)
+	}
+	if got := ran.all(); len(got) != 3 || got[0].args[0] != "22" || got[1].script != viewScripts["oom"] || got[2].script != facts.Script {
 		t.Fatalf("ran %+v", got)
+	}
+}
+
+// The facts view runs the one facts script the Advisor also runs in the
+// sandbox, so a relayed node reports what a node with an agent does.
+func TestFactsViewIsTheSharedScript(t *testing.T) {
+	if viewScripts["facts"] != facts.Script || !strings.Contains(facts.Script, "##hostname") {
+		t.Fatal("the facts view is not facts.Script")
 	}
 }
 
@@ -271,7 +284,7 @@ func TestViewScriptsRunHere(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("no python3")
 	}
-	for view, want := range map[string]string{"logsize": "##logdir", "unowned": "##installed", "procs": "\t", "errlog": "", "oom": ""} {
+	for view, want := range map[string]string{"logsize": "##logdir", "unowned": "##installed", "procs": "\t", "facts": "##hostname", "errlog": "", "oom": ""} {
 		out, errOut, err := RunScript(context.Background(), "", viewScripts[view], nil)
 		if err != nil || !strings.Contains(string(out), want) {
 			t.Errorf("%s: %v %q %q", view, err, out, errOut)

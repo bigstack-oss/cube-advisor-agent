@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bigstack-oss/cube-advisor-agent/pkg/facts"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
 )
 
@@ -179,6 +180,8 @@ var viewScripts = map[string]string{
 	"failed":  `exec systemctl list-units --state=failed --no-legend --plain --no-pager`,
 	"unit":    `exec systemctl show --no-pager -p ` + unitProps + ` -- "$1"`,
 	"procs":   "exec python3 - <<'PY'\n" + procsPy + "PY\n",
+	// facts is the node's inventory, for a node with no agent of its own.
+	"facts": facts.Script,
 	// errlog counts error-priority journal lines per day back from now
 	// (day 0 is the last 24 h) and unit, over the last 7 days.
 	"errlog": `now=$(date +%s); journalctl -p err --since "-7 days" -o short-unix --no-pager -q 2>/dev/null |

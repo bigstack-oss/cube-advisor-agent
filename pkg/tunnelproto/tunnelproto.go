@@ -103,6 +103,10 @@ const ConsoleRelay = "console-relay"
 // other nodes over their node-to-node SSH (host-ro --node NODE VIEW).
 const PeerReadsBroker = "host-ro-peers"
 
+// PeerFactsBroker in Hello.Brokers says host-ro also serves the facts view
+// (pkg/facts), on this node and on its peers.
+const PeerFactsBroker = "host-ro-facts"
+
 // PeerUnreachable starts a peer read's answer when the node could not be
 // reached.
 const PeerUnreachable = "peer not reachable"
