@@ -23,6 +23,7 @@ func stubPeers(t *testing.T, run func(ctx context.Context, out io.Writer) error)
 	oldSDK, oldCmd := hexSDK, enrollPeersCmd
 	calls := 0
 	hexSDK = sdk
+	noCOSVersion(t)
 	enrollPeersCmd = func(ctx context.Context, out io.Writer) error { calls++; return run(ctx, out) }
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
@@ -136,6 +137,7 @@ func runFakeSDK(t *testing.T, peers ...string) (passes int, pending string, logs
 	}
 	oldSDK := hexSDK
 	hexSDK = sdk
+	noCOSVersion(t)
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	t.Cleanup(func() { hexSDK = oldSDK; log.SetOutput(os.Stderr) })
@@ -177,4 +179,129 @@ func TestPeersStopWhenNoProgress(t *testing.T) {
 	if !strings.Contains(logs, "2 node(s) still not enrolled") {
 		t.Errorf("no-progress stop not logged:\n%s", logs)
 	}
+}
+
+// stubCOSVersion points the agent at a fake /etc/version holding v.
+func stubCOSVersion(t *testing.T, v string) string {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), "version")
+	if err := os.WriteFile(f, []byte(v+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := cosVersionFile
+	cosVersionFile = f
+	t.Cleanup(func() { cosVersionFile = old })
+	return f
+}
+
+func allEnrolledRun(_ context.Context, out io.Writer) error {
+	fmt.Fprintln(out, allEnrolled)
+	return nil
+}
+
+// A CubeCOS upgrade fans out once on the next admitted connect.
+func TestAVersionChangeFansOutOnce(t *testing.T) {
+	calls, _ := stubPeers(t, allEnrolledRun)
+	stubCOSVersion(t, "3.2.1")
+	dir := t.TempDir()
+	_ = identity.RecordPeersVersion(dir, "3.2.0")
+	enrollPeersOnce(context.Background(), dir)
+	enrollPeersOnce(context.Background(), dir)
+	if *calls != 1 {
+		t.Errorf("fan-out ran %d times, want 1", *calls)
+	}
+	if v, _ := identity.PeersVersion(dir); v != "3.2.1" {
+		t.Errorf("recorded version %q, want 3.2.1", v)
+	}
+}
+
+// An unchanged version runs nothing.
+func TestAnUnchangedVersionDoesNotFanOut(t *testing.T) {
+	calls, _ := stubPeers(t, allEnrolledRun)
+	stubCOSVersion(t, "3.2.0")
+	dir := t.TempDir()
+	_ = identity.RecordPeersVersion(dir, "3.2.0")
+	enrollPeersOnce(context.Background(), dir)
+	if *calls != 0 {
+		t.Errorf("fan-out ran %d times, want 0", *calls)
+	}
+}
+
+// Upgrading the agent itself on an enrolled node (no record yet) records
+// the version without fanning out, so a fleet upgrade is quiet.
+func TestFirstSightRecordsWithoutFanningOut(t *testing.T) {
+	calls, _ := stubPeers(t, allEnrolledRun)
+	stubCOSVersion(t, "3.2.0")
+	dir := t.TempDir()
+	enrollPeersOnce(context.Background(), dir)
+	if *calls != 0 {
+		t.Errorf("fan-out ran %d times on first sight, want 0", *calls)
+	}
+	if v, ok := identity.PeersVersion(dir); !ok || v != "3.2.0" {
+		t.Errorf("recorded version %q (%v), want 3.2.0", v, ok)
+	}
+}
+
+// A fresh enrolment fans out and records the version, so the next connect
+// on the same version is quiet.
+func TestAFreshEnrolmentRecordsTheVersion(t *testing.T) {
+	calls, _ := stubPeers(t, allEnrolledRun)
+	stubCOSVersion(t, "3.2.0")
+	dir := t.TempDir()
+	_ = identity.MarkPeersPending(dir)
+	enrollPeersOnce(context.Background(), dir)
+	enrollPeersOnce(context.Background(), dir)
+	if *calls != 1 {
+		t.Errorf("fan-out ran %d times, want 1", *calls)
+	}
+	if v, _ := identity.PeersVersion(dir); v != "3.2.0" {
+		t.Errorf("recorded version %q, want 3.2.0", v)
+	}
+}
+
+// Without a readable /etc/version only a fresh enrolment fans out.
+func TestNoVersionFileRunsOnlyOnEnrolment(t *testing.T) {
+	calls, _ := stubPeers(t, allEnrolledRun)
+	dir := t.TempDir()
+	enrollPeersOnce(context.Background(), dir)
+	if *calls != 0 {
+		t.Errorf("fan-out ran %d times, want 0", *calls)
+	}
+	if _, ok := identity.PeersVersion(dir); ok {
+		t.Error("recorded a version that could not be read")
+	}
+}
+
+// On a release that still refuses non-control peers, the upgrade fan-out
+// stops once the count stops falling, and later connects stay quiet.
+func TestAnUpgradeWithRefusedPeersStopsOnNoProgress(t *testing.T) {
+	d := t.TempDir()
+	sdk := filepath.Join(d, "hex_sdk")
+	_ = os.WriteFile(sdk, []byte(fakeSDK), 0o755)
+	_ = os.WriteFile(filepath.Join(d, "pending"), []byte("compute2\ncompute3\n"), 0o644)
+	old := hexSDK
+	hexSDK = sdk
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { hexSDK = old; log.SetOutput(os.Stderr) })
+	stubCOSVersion(t, "3.2.0")
+	dir := t.TempDir()
+	_ = identity.RecordPeersVersion(dir, "3.1.20")
+	enrollPeersOnce(context.Background(), dir)
+	enrollPeersOnce(context.Background(), dir)
+	calls, _ := os.ReadFile(filepath.Join(d, "calls"))
+	if n := strings.Count(string(calls), "run"); n != 2 {
+		t.Errorf("%d passes, want 2 (one fan-out, stopped on no progress)\n%s", n, buf.String())
+	}
+	if !strings.Contains(buf.String(), "2 node(s) still not enrolled") {
+		t.Errorf("no-progress stop not logged:\n%s", buf.String())
+	}
+}
+
+// noCOSVersion hides the host's /etc/version from a test.
+func noCOSVersion(t *testing.T) {
+	t.Helper()
+	old := cosVersionFile
+	cosVersionFile = filepath.Join(t.TempDir(), "missing")
+	t.Cleanup(func() { cosVersionFile = old })
 }

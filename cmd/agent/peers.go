@@ -29,20 +29,39 @@ var enrollPeersCmd = func(ctx context.Context, out io.Writer) error {
 	return cmd.Run()
 }
 
+// cosVersionFile names the running CubeCOS release; a var for tests.
+var cosVersionFile = "/etc/version"
+
 // enrollPeersOnce enrols the cluster's other nodes the first time this node is
-// admitted after enrolling. advisor_enroll_peers may enrol only one peer per
-// run, so it is re-run while the count of unenrolled peers it reports falls;
-// that count bounds the passes. Each peer lands on the Advisor's enrolment
+// admitted after enrolling, and again on the first admitted connect after the
+// CubeCOS version changes (an upgrade may let more nodes enrol). With no
+// recorded version, an enrolled node records the current one without running.
+// advisor_enroll_peers may enrol only one peer per run, so it is re-run while
+// the count of unenrolled peers it reports falls; that count bounds the passes. Each peer lands on the Advisor's enrolment
 // page to verify, and `advisor enroll` with no token retries.
 func enrollPeersOnce(ctx context.Context, dir string) {
-	if !identity.TakePeersPending(dir) {
+	fresh := identity.TakePeersPending(dir)
+	cur := cosVersion()
+	last, seen := identity.PeersVersion(dir)
+	upgraded := seen && cur != "" && cur != last
+	// Recorded before running: a reconnect mid-run must not start another.
+	if cur != "" && cur != last {
+		if err := identity.RecordPeersVersion(dir, cur); err != nil {
+			log.Printf("agent: peers: %v", err)
+		}
+	}
+	if !fresh && !upgraded {
 		return
 	}
 	if _, err := os.Stat(hexSDK); err != nil {
 		log.Printf("agent: peers: %s not found; enrol the other nodes with `advisor enroll`", hexSDK)
 		return
 	}
-	log.Printf("agent: peers: admitted; enrolling this cluster's other nodes")
+	if fresh {
+		log.Printf("agent: peers: admitted; enrolling this cluster's other nodes")
+	} else {
+		log.Printf("agent: peers: CubeCOS changed from %s to %s; enrolling any node it now allows", last, cur)
+	}
 	prev := -1
 	for pass := 1; ; pass++ {
 		log.Printf("agent: peers: pass %d", pass)
@@ -98,3 +117,12 @@ func enrollPeersPass(ctx context.Context) (int, error) {
 var enrollingRE = regexp.MustCompile(`^Enrolling (\d+) node\(s\):`)
 
 const allEnrolled = "Every node of this cluster is already enrolled."
+
+// cosVersion returns the trimmed /etc/version, or "" when unreadable.
+func cosVersion() string {
+	b, err := os.ReadFile(cosVersionFile)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
