@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,6 +62,12 @@ type Server struct {
 	// OpenStack backs os-ro; nil refuses its calls.
 	OpenStack OpenStackSource
 	Client    *http.Client
+	// NetGuard returns the cluster's networks for net-ro; nil means
+	// LocalNetGuard. LookupHost resolves names; nil means the guarded resolver.
+	NetGuard   func(ctx context.Context) (NetGuard, error)
+	LookupHost func(ctx context.Context, host string) ([]netip.Addr, error)
+	// PingRun pings one checked address; nil runs ping(8).
+	PingRun func(ctx context.Context, ip netip.Addr, count int) ([]byte, error)
 
 	mu      sync.Mutex
 	table   []CephCommand
@@ -69,6 +76,11 @@ type Server struct {
 	nodesMu sync.Mutex
 	nodes   []string
 	nodesAt time.Time
+
+	guardMu  sync.Mutex
+	guard    NetGuard
+	guardAt  time.Time
+	guardSet bool
 }
 
 // Start creates the directory, the client commands and the sockets, and
@@ -84,7 +96,7 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 	for name, h := range map[string]http.Handler{"prom.sock": http.HandlerFunc(s.prom), "ceph.sock": http.HandlerFunc(s.ceph),
-		"host.sock": http.HandlerFunc(s.host), "os.sock": http.HandlerFunc(s.openstack)} {
+		"host.sock": http.HandlerFunc(s.host), "os.sock": http.HandlerFunc(s.openstack), "net.sock": http.HandlerFunc(s.net)} {
 		path := filepath.Join(s.Dir, name)
 		_ = os.Remove(path)
 		l, err := net.Listen("unix", path)
@@ -335,5 +347,20 @@ H="` + CallHeader + `: ${ADVISOR_CALL_ID:-}"
 [ $# -eq 3 ] || { sed -n '2,4p' "$0" >&2; exit 2; }
 curl -sS --max-time 90 --unix-socket "$S" -H "$H" -X "$1" -G http://broker/get --data-urlencode "service=$2" --data-urlencode "path=$3"
 `
-	return map[string]string{"prom": prom, "ceph-ro": ceph, "host-ro": host, "os-ro": osro}
+	netro := `#!/bin/sh
+# net-ro: read-only probes to the cluster's own networks; the sandbox has none (ADR 0019).
+#   net-ro zk HOST srvr|dump|ruok|mntr|stat|conf|envi [--newline] [--port P] [--repeat N]
+#   net-ro tcp HOST PORT [--repeat N]   connect test with timing
+#   net-ro http [--head] URL            GET or HEAD, no request body, body cut at 256 KiB
+#   net-ro ping HOST [-c N]             N up to 20, default 3
+#   net-ro dns NAME                     addresses, each marked in or outside the cluster
+# zk sends exactly 4 bytes; --newline sends "CMD\n" like echo CMD | nc.
+# --repeat N (up to 1000) prints empty/non-empty counts and timings instead of the reply.
+S=` + dir + `/net.sock
+H="` + CallHeader + `: ${ADVISOR_CALL_ID:-}"
+[ $# -gt 0 ] || { sed -n '2,9p' "$0" >&2; exit 2; }
+python3 -c 'import json,sys; print(json.dumps({"args": sys.argv[1:]}))' "$@" |
+  curl -sS --max-time 90 --unix-socket "$S" -H "$H" -H 'Content-Type: application/json' --data-binary @- http://broker/run
+`
+	return map[string]string{"prom": prom, "ceph-ro": ceph, "host-ro": host, "os-ro": osro, "net-ro": netro}
 }

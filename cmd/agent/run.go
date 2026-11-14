@@ -105,7 +105,7 @@ func runCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "run: brokers not started: %v\n", err)
 	} else {
 		toolplane.SandboxBrokerDir = broker.DefaultDir
-		servedBrokers = []string{"prom", "ceph-ro", "host-ro"}
+		servedBrokers = []string{"prom", "ceph-ro", "host-ro", "net-ro"}
 		if broker.PeerReadsAvailable() {
 			servedBrokers = append(servedBrokers, tunnelproto.PeerReadsBroker, tunnelproto.PeerFactsBroker)
 		}
