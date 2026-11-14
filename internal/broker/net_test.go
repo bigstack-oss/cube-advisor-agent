@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -285,6 +286,20 @@ func TestDestinationsOutsideTheClusterAreNeverDialled(t *testing.T) {
 	out, _ = run(t, s, "dns", "c1")
 	if !strings.Contains(out, "2001:db8::5\toutside") || !strings.Contains(out, "10.32.1.6\tin the cluster") {
 		t.Errorf("dns: %q", out)
+	}
+}
+
+func TestANodeNameUsesItsNodeAddressNotLoopback(t *testing.T) {
+	both := []netip.Addr{netip.MustParseAddr("::1"), netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("10.32.1.6")}
+	s := netServer(func(s *Server) {
+		s.Nodes = func(context.Context) ([]string, error) { return []string{"c1", "c2"}, nil }
+		s.LookupHost = func(context.Context, string) ([]netip.Addr, error) { return slices.Clone(both), nil }
+		s.PingRun = func(_ context.Context, ip netip.Addr, _ int) ([]byte, error) { return []byte(ip.String()), nil }
+	})
+	for host, want := range map[string]string{"c1": "10.32.1.6", "C1": "10.32.1.6", "other": "::1"} {
+		if out, err := run(t, s, "ping", host); err != nil || out != want {
+			t.Errorf("ping %s: %q %v, want %s", host, out, err, want)
+		}
 	}
 }
 

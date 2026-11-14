@@ -2,6 +2,7 @@ package broker
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -264,11 +265,17 @@ func (s *Server) lookup(ctx context.Context, g NetGuard, host string) ([]netip.A
 }
 
 // target resolves host and keeps the addresses the guard allows; none
-// allowed is a refusal.
+// allowed is a refusal. A cluster node's name uses its node address, not
+// the loopback entry /etc/hosts gives the node's own name.
 func (s *Server) target(ctx context.Context, g NetGuard, host string) (netip.Addr, error) {
 	addrs, err := s.lookup(ctx, g, host)
 	if err != nil {
 		return netip.Addr{}, &netRefusal{fmt.Sprintf("%s: cannot resolve: %v", host, err)}
+	}
+	if s.isNode(ctx, host) {
+		slices.SortStableFunc(addrs, func(a, b netip.Addr) int {
+			return cmp.Compare(boolInt(a.IsLoopback()), boolInt(b.IsLoopback()))
+		})
 	}
 	var why []string
 	for _, a := range addrs {
@@ -282,6 +289,21 @@ func (s *Server) target(ctx context.Context, g NetGuard, host string) (netip.Add
 		return netip.Addr{}, &netRefusal{host + ": no addresses"}
 	}
 	return netip.Addr{}, &netRefusal{"refused: " + host + ": " + strings.Join(why, "; ")}
+}
+
+func (s *Server) isNode(ctx context.Context, host string) bool {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return false
+	}
+	nodes, err := s.clusterNodes(ctx)
+	return err == nil && slices.ContainsFunc(nodes, func(n string) bool { return strings.EqualFold(n, host) })
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 type netRefusal struct{ msg string }
