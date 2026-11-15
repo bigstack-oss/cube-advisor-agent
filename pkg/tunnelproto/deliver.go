@@ -27,7 +27,7 @@ const PackageReceiveTool = "package_receive"
 const PackageReceiveCapability = "package-receive"
 
 // FreeSpaceFactor is the free space a delivery needs, as a multiple of the
-// file's size (owner decision D1, still open).
+// file's size (owner decision D1).
 const FreeSpaceFactor = 2
 
 // MaxPackageBytes bounds one delivered file.
@@ -182,4 +182,22 @@ func readLine(br *bufio.Reader, v any) error {
 		return fmt.Errorf("line exceeds %d bytes", MaxToolOutputBytes)
 	}
 	return json.Unmarshal(line, v)
+}
+
+// Fixed reads the install flow asks for: each runs one documented hex_cli
+// command with no caller text.
+const (
+	RollDryrunTool     = "rolling_update_dryrun"
+	FixpackStatusTool  = "fixpack_status"
+	FixpackHistoryTool = "fixpack_history"
+)
+
+// UpdateReadsCapability in Hello.Capabilities says the agent serves them.
+const UpdateReadsCapability = "update-reads"
+
+// UpdateReadArgv maps each fixed read to the command it runs.
+var UpdateReadArgv = map[string][]string{
+	RollDryrunTool:     {"/usr/sbin/hex_cli", "-c", "cluster", "-c", "rolling_update", "dryrun"},
+	FixpackStatusTool:  {"/usr/sbin/hex_cli", "-c", "fixpack", "-c", "status"},
+	FixpackHistoryTool: {"/usr/sbin/hex_cli", "-c", "fixpack", "-c", "view_history"},
 }

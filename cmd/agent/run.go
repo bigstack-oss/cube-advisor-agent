@@ -119,7 +119,7 @@ func runCmd(args []string) int {
 	// Background jobs: followed and stopped over the tool plane, started
 	// through the recorded shell, deadlines enforced here too.
 	jobs := &toolplane.Jobs{Dir: toolplane.DefaultJobsDir}
-	reg, states, err := configure(*dir, append(append([]toolplane.Tool{}, toolplane.Tools...), toolplane.JobTools(jobs)...), auditor)
+	reg, states, err := configure(*dir, append(append([]toolplane.Tool{}, toolplane.Tools...), append(toolplane.JobTools(jobs), toolplane.UpdateReadTools(nil)...)...), auditor)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return exitFailed
@@ -148,7 +148,8 @@ func runCmd(args []string) int {
 		cons.Audit = relayAuditor(auditor)
 		capabilities = []string{tunnelproto.ConsoleRelay}
 	}
-	capabilities = append(capabilities, tunnelproto.JobsCapability, tunnelproto.PackageReceiveCapability)
+	capabilities = append(capabilities, tunnelproto.JobsCapability, tunnelproto.PackageReceiveCapability,
+		tunnelproto.UpdateReadsCapability)
 	hello := helloFor(id.ClusterID, fp, reg)
 	url := "wss://" + serverAddr + tunnel.WSPath
 	httpClient := tunnel.NewTLSClient(tlsCfg)
