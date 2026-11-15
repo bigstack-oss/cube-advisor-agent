@@ -40,6 +40,9 @@ type Server struct {
 
 	// CallTimeout bounds one tool call end to end. Zero uses the default.
 	CallTimeout time.Duration
+
+	// Receive takes package deliveries. Nil refuses them.
+	Receive *Receiver
 }
 
 // defaultCallTimeout is one rung of the timeout ladder: it must sit above the
@@ -180,6 +183,11 @@ func (s *Server) serveTool(ctx context.Context, ch *tunnel.Channel) {
 		return
 	}
 	name := ch.Open.Target.Name
+	if name == tunnelproto.PackageReceiveTool {
+		// A delivery runs as long as its bytes keep coming, not the call timeout.
+		s.serveReceive(ctx, ch)
+		return
+	}
 
 	args, err := readArgs(ch)
 	if err != nil {

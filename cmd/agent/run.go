@@ -148,7 +148,7 @@ func runCmd(args []string) int {
 		cons.Audit = relayAuditor(auditor)
 		capabilities = []string{tunnelproto.ConsoleRelay}
 	}
-	capabilities = append(capabilities, tunnelproto.JobsCapability)
+	capabilities = append(capabilities, tunnelproto.JobsCapability, tunnelproto.PackageReceiveCapability)
 	hello := helloFor(id.ClusterID, fp, reg)
 	url := "wss://" + serverAddr + tunnel.WSPath
 	httpClient := tunnel.NewTLSClient(tlsCfg)
@@ -173,6 +173,7 @@ func runCmd(args []string) int {
 		Tools:   reg,
 		Console: cons,
 		Web:     &console.WebHandler{Allow: console.FileAllowlist{Path: *webTargets}},
+		Receive: &agent.Receiver{Audit: auditor},
 	}
 	backoff := tunnel.DefaultBackoff()
 	guard := tunnel.DefaultFlapGuard()
