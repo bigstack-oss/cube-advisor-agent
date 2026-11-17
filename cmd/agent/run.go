@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"os/user"
@@ -152,7 +154,10 @@ func runCmd(args []string) int {
 		tunnelproto.UpdateReadsCapability)
 	hello := helloFor(id.ClusterID, fp, reg)
 	url := "wss://" + serverAddr + tunnel.WSPath
-	httpClient := tunnel.NewTLSClient(tlsCfg)
+	// The websocket library dials the wss URL as https.
+	proxy, proxyLine := egressProxy(*dir, &neturl.URL{Scheme: "https", Host: serverAddr}, http.ProxyFromEnvironment)
+	fmt.Fprintf(os.Stderr, "run: %s\n", proxyLine)
+	httpClient := tunnel.NewTLSClientVia(tlsCfg, proxy)
 	connect := func(ctx context.Context) (*tunnel.Session, error) {
 		conn, err := tunnel.DialWS(ctx, url, nil, httpClient)
 		if err != nil {

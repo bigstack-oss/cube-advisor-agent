@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"net/url"
 
 	"github.com/coder/websocket"
 )
@@ -21,8 +22,9 @@ const WSPath = "/tunnel"
 
 // DialWS opens an outbound websocket and returns it as a net.Conn.
 //
-// Outbound-only over 443 is the whole connectivity story: it traverses
-// corporate egress proxies with no inbound rule and no VPN.
+// Outbound-only over 443 is the whole connectivity story: no inbound rule and
+// no VPN. Through an egress proxy only when tlsClient was built with one
+// (NewTLSClientVia), and only a CONNECT proxy: the TLS is end to end.
 func DialWS(ctx context.Context, url string, hdr http.Header, tlsClient *http.Client) (net.Conn, error) {
 	c, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
 		HTTPHeader: hdr,
@@ -39,7 +41,13 @@ func DialWS(ctx context.Context, url string, hdr http.Header, tlsClient *http.Cl
 // cfg. The transport is HTTP/1.1 only — the websocket upgrade is an HTTP/1.1
 // mechanism, and negotiating h2 would break it.
 func NewTLSClient(cfg *tls.Config) *http.Client {
-	return &http.Client{Transport: &http.Transport{TLSClientConfig: cfg}}
+	return NewTLSClientVia(cfg, nil)
+}
+
+// NewTLSClientVia is NewTLSClient through the egress proxy proxy picks, as
+// http.Transport.Proxy; nil dials direct.
+func NewTLSClientVia(cfg *tls.Config, proxy func(*http.Request) (*url.URL, error)) *http.Client {
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: cfg, Proxy: proxy}}
 }
 
 // AcceptWS upgrades an inbound request and returns it as a net.Conn.

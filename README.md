@@ -130,6 +130,23 @@ only after `enroll` succeeds; an un-enrolled node has nothing to connect with.
 The agent already reconnects with backoff on its own, so the unit's only job is
 to keep the process alive.
 
+### Behind an egress proxy
+
+The tunnel dials through an HTTP `CONNECT` proxy when one is configured:
+
+1. `/etc/cube/advisor-agent/proxy` — one line, e.g. `http://proxy.example:3128`
+   (`user:pass@` allowed). It sits with the identity, so a CubeCOS upgrade
+   carries it across. Write it on every enrolled node.
+2. Otherwise `HTTPS_PROXY` / `NO_PROXY` in the agent's environment.
+3. Otherwise direct, as without a proxy.
+
+`run` logs which one it uses as `egress proxy: …` at startup. Enrolment
+(`enroll`) follows `HTTPS_PROXY` / `NO_PROXY` only.
+
+The tunnel is mutual TLS end to end, so a TLS-inspecting proxy cannot carry it:
+it cannot present the node's client certificate. Exempt the Advisor from
+inspection, or use a pass-through proxy.
+
 ## Status
 
 Early, but no longer only a protocol. Built and tested: the wire protocol and
