@@ -103,6 +103,9 @@ func runCmd(args []string) int {
 	if _, err := openstack.ReadOpenrc(openstack.OpenrcPath); err == nil {
 		brk.OpenStack = openstack.NewAdmin(openstack.OpenrcPath)
 	}
+	if broker.KubeAvailable() {
+		brk.KubeRun = broker.LocalKubeRun
+	}
 	if err := brk.Start(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "run: brokers not started: %v\n", err)
 	} else {
@@ -113,6 +116,9 @@ func runCmd(args []string) int {
 		}
 		if brk.OpenStack != nil {
 			servedBrokers = append(servedBrokers, "os-ro")
+		}
+		if brk.KubeRun != nil {
+			servedBrokers = append(servedBrokers, "kube-ro")
 		}
 	}
 	// Every per-cluster setting the operator configured, through the one path

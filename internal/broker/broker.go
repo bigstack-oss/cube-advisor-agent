@@ -68,6 +68,9 @@ type Server struct {
 	LookupHost func(ctx context.Context, host string) ([]netip.Addr, error)
 	// PingRun pings one checked address; nil runs ping(8).
 	PingRun func(ctx context.Context, ip netip.Addr, count int) ([]byte, error)
+	// KubeRun runs `kubectl args...` against the node's k3s; nil refuses
+	// kube-ro's calls.
+	KubeRun func(ctx context.Context, args []string) (stdout, stderr []byte, err error)
 
 	mu      sync.Mutex
 	table   []CephCommand
@@ -96,7 +99,8 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 	for name, h := range map[string]http.Handler{"prom.sock": http.HandlerFunc(s.prom), "ceph.sock": http.HandlerFunc(s.ceph),
-		"host.sock": http.HandlerFunc(s.host), "os.sock": http.HandlerFunc(s.openstack), "net.sock": http.HandlerFunc(s.net)} {
+		"host.sock": http.HandlerFunc(s.host), "os.sock": http.HandlerFunc(s.openstack), "net.sock": http.HandlerFunc(s.net),
+		"kube.sock": http.HandlerFunc(s.kube)} {
 		path := filepath.Join(s.Dir, name)
 		_ = os.Remove(path)
 		l, err := net.Listen("unix", path)
@@ -362,5 +366,18 @@ H="` + CallHeader + `: ${ADVISOR_CALL_ID:-}"
 python3 -c 'import json,sys; print(json.dumps({"args": sys.argv[1:]}))' "$@" |
   curl -sS --max-time 90 --unix-socket "$S" -H "$H" -H 'Content-Type: application/json' --data-binary @- http://broker/run
 `
-	return map[string]string{"prom": prom, "ceph-ro": ceph, "host-ro": host, "os-ro": osro, "net-ro": netro}
+	kubero := `#!/bin/sh
+# kube-ro: read-only kubectl against this node's k3s (ADR 0019).
+#   kube-ro get|describe|logs|events|top|api-resources|api-versions|version ...
+#   kube-ro get pods -A -o wide     kube-ro describe node     kube-ro events -A
+#   kube-ro logs -n NS POD --tail 200 [--previous]
+#   kube-ro get --raw /api/v1/nodes/NODE/proxy/configz   the kubelet's effective config
+# Secrets, exec, port-forward, proxies to apps, watch and follow are refused.
+S=` + dir + `/kube.sock
+H="` + CallHeader + `: ${ADVISOR_CALL_ID:-}"
+[ $# -gt 0 ] || { sed -n '2,7p' "$0" >&2; exit 2; }
+python3 -c 'import json,sys; print(json.dumps({"args": sys.argv[1:]}))' "$@" |
+  curl -sS --max-time 90 --unix-socket "$S" -H "$H" -H 'Content-Type: application/json' --data-binary @- http://broker/run
+`
+	return map[string]string{"prom": prom, "ceph-ro": ceph, "host-ro": host, "os-ro": osro, "net-ro": netro, "kube-ro": kubero}
 }
