@@ -35,7 +35,8 @@ var sandboxHidden = []string{
 var sandboxKeyrings = []string{"/var/lib/ceph/*/*keyring", "/var/lib/ceph/*/*/*keyring"}
 
 // SandboxArgv is the argv that runs command in ADR 0018's read-only sandbox:
-// a transient systemd unit with a read-only filesystem, a private /tmp,
+// a transient systemd unit with a read-only filesystem (host /tmp included),
+// scratch only in a memory-backed /run,
 // read-only block devices, no network, only the read-only DAC capability,
 // setuid ignored, and credentials and control sockets hidden. No network because CubeCOS runs Ceph with cephx off, so any
 // networked read could also write; network reads are declared tools.
@@ -57,7 +58,6 @@ func SandboxArgvFor(command string, timeout time.Duration, callID string) []stri
 	props := []string{
 		"ProtectSystem=strict",
 		"ProtectHome=read-only",
-		"PrivateTmp=yes",
 		// Block devices are readable, never writable; other devices closed.
 		"DevicePolicy=closed",
 		"DeviceAllow=block-sd r",
@@ -72,7 +72,9 @@ func SandboxArgvFor(command string, timeout time.Duration, callID string) []stri
 		"ProtectKernelModules=yes",
 		"ProtectControlGroups=yes",
 		"RestrictSUIDSGID=yes",
-		"Environment=HOME=/tmp",
+		// The host /tmp is read-only here; scratch goes to the /run tmpfs.
+		"Environment=HOME=/run",
+		"Environment=TMPDIR=/run",
 		// No network here, so make the ceph CLI give up in seconds.
 		`Environment="CEPH_ARGS=--client_mount_timeout=3"`,
 		fmt.Sprintf("RuntimeMaxSec=%d", int(timeout.Seconds())),

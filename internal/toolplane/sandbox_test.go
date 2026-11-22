@@ -24,7 +24,7 @@ func TestShellReadRunsTheCommandInsideTheSandbox(t *testing.T) {
 	}
 	joined := strings.Join(got, " ")
 	for _, want := range []string{
-		"ProtectSystem=strict", "NoNewPrivileges=yes", "CapabilityBoundingSet=", "PrivateTmp=yes",
+		"ProtectSystem=strict", "NoNewPrivileges=yes", "CapabilityBoundingSet=",
 		"InaccessiblePaths=-/etc/ceph/ceph.client.admin.keyring", "InaccessiblePaths=-/etc/cube/advisor-agent",
 		"InaccessiblePaths=-/run/dbus", "PrivateNetwork=yes",
 		"DevicePolicy=closed", "DeviceAllow=block-sd r", "CapabilityBoundingSet=CAP_DAC_READ_SEARCH",
@@ -105,5 +105,26 @@ func TestSandboxBindsBrokersAndThrowawayScratch(t *testing.T) {
 	}
 	if strings.Contains(argv, "TemporaryFileSystem=/var/log") {
 		t.Error("/var/log must stay the real, read-only logs")
+	}
+}
+
+func TestSandboxShowsHostTmpAndScratchesUnderRun(t *testing.T) {
+	argv := SandboxArgvFor("ls /tmp", time.Minute, "")
+	var home, tmpdir string
+	for _, a := range argv {
+		if strings.HasPrefix(a, "PrivateTmp") {
+			t.Errorf("argv has %q; the host /tmp must stay visible", a)
+		}
+		if v, ok := strings.CutPrefix(a, "Environment=HOME="); ok {
+			home = v
+		}
+		if v, ok := strings.CutPrefix(a, "Environment=TMPDIR="); ok {
+			tmpdir = v
+		}
+	}
+	for name, v := range map[string]string{"HOME": home, "TMPDIR": tmpdir} {
+		if v != "/run" && !strings.HasPrefix(v, "/run/") {
+			t.Errorf("%s = %q; scratch must live in the memory-backed /run", name, v)
+		}
 	}
 }
