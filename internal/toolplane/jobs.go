@@ -165,9 +165,7 @@ func DefaultSpawn(deadline time.Time) func(id string, argv []string) (string, er
 		if _, err := os.Stat("/run/systemd/system"); err == nil && os.Geteuid() == 0 {
 			if path, err := exec.LookPath("systemd-run"); err == nil {
 				unit := "cube-advisor-job-" + id
-				max := int(time.Until(deadline).Seconds()) + 600
-				args := []string{"--unit=" + unit, "--description=Advisor background job " + id, "--collect", "--quiet",
-					"-p", "TimeoutStopSec=15", "-p", fmt.Sprintf("RuntimeMaxSec=%d", max), "--"}
+				args := jobRunArgs(id, unit, int(time.Until(deadline).Seconds())+600)
 				out, err := exec.Command(path, append(args, argv...)...).CombinedOutput()
 				if err != nil {
 					return "", fmt.Errorf("systemd-run: %v: %s", err, bytes.TrimSpace(out))
@@ -177,6 +175,13 @@ func DefaultSpawn(deadline time.Time) func(id string, argv []string) (string, er
 		}
 		return "", SetsidSpawn(argv)
 	}
+}
+
+// jobRunArgs are DefaultSpawn's systemd-run options. --uid=root makes systemd
+// set HOME, USER and LOGNAME as in a login shell; a transient unit has none.
+func jobRunArgs(id, unit string, maxSec int) []string {
+	return []string{"--unit=" + unit, "--description=Advisor background job " + id, "--collect", "--quiet",
+		"--uid=root", "-p", "TimeoutStopSec=15", "-p", fmt.Sprintf("RuntimeMaxSec=%d", maxSec), "--"}
 }
 
 // SetsidSpawn starts argv as the leader of a new session and process group,

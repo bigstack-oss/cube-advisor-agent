@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -243,4 +244,15 @@ func TestJobArgvSurvivesSystemdExpansion(t *testing.T) {
 		t.Fatalf("pgid = %d, want the leader's pid", pg)
 	}
 	waitState(t, j, "j-sysd", tunnelproto.JobExited)
+}
+
+// A transient unit has no HOME; tools such as the openstack CLI need one.
+func TestJobRunArgsRunAsRootLogin(t *testing.T) {
+	args := jobRunArgs("job_1", "cube-advisor-job-job_1", 900)
+	if !slices.Contains(args, "--uid=root") {
+		t.Fatalf("args = %q; want --uid=root so systemd sets HOME", args)
+	}
+	if args[len(args)-1] != "--" {
+		t.Fatalf("args = %q; must end with --", args)
+	}
 }
