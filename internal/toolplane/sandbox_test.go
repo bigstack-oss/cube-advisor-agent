@@ -3,6 +3,9 @@ package toolplane
 import (
 	"context"
 	"errors"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +128,43 @@ func TestSandboxShowsHostTmpAndScratchesUnderRun(t *testing.T) {
 	for name, v := range map[string]string{"HOME": home, "TMPDIR": tmpdir} {
 		if v != "/run" && !strings.HasPrefix(v, "/run/") {
 			t.Errorf("%s = %q; scratch must live in the memory-backed /run", name, v)
+		}
+	}
+}
+
+func TestSandboxBindsRunMarkersButNoKeysLogsOrSockets(t *testing.T) {
+	root := t.TempDir()
+	for _, f := range []string{"cube_commit_done", "health_kafka_check", "sshd.pid", "bootstrap_done",
+		"hex_config_commit_times", "ec2.key", "cube_bootstrap.log", "cube_a:b", "motd"} {
+		if err := os.WriteFile(filepath.Join(root, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, "cube_dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/shadow", filepath.Join(root, "cube_link")); err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("unix", filepath.Join(root, "cube_sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	old := sandboxRunRoot
+	sandboxRunRoot = root
+	defer func() { sandboxRunRoot = old }()
+	argv := strings.Join(SandboxArgvFor("ls /run", time.Minute, ""), "\n")
+
+	for _, f := range []string{"bootstrap_done", "cube_commit_done", "health_kafka_check", "hex_config_commit_times", "sshd.pid"} {
+		if !strings.Contains(argv, "BindReadOnlyPaths=-"+filepath.Join(root, f)+"\n") {
+			t.Errorf("argv does not bind %s read-only", f)
+		}
+	}
+	for _, f := range []string{"ec2.key", "cube_bootstrap.log", "cube_a:b", "motd", "cube_dir", "cube_link", "cube_sock"} {
+		if strings.Contains(argv, filepath.Join(root, f)) {
+			t.Errorf("argv binds %s; only allowlisted regular files may show through", f)
 		}
 	}
 }

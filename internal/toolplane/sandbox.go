@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -36,7 +38,8 @@ var sandboxKeyrings = []string{"/var/lib/ceph/*/*keyring", "/var/lib/ceph/*/*/*k
 
 // SandboxArgv is the argv that runs command in ADR 0018's read-only sandbox:
 // a transient systemd unit with a read-only filesystem (host /tmp included),
-// scratch only in a memory-backed /run,
+// scratch only in a memory-backed /run with the host's state markers bound
+// read-only over it,
 // read-only block devices, no network, only the read-only DAC capability,
 // setuid ignored, and credentials and control sockets hidden. No network because CubeCOS runs Ceph with cephx off, so any
 // networked read could also write; network reads are declared tools.
@@ -51,6 +54,37 @@ var SandboxBrokerDir string
 // sandboxScratch are throwaway, memory-backed writable directories: tools may
 // write lock files and scratch there, and the host never sees it.
 var sandboxScratch = []string{"/run", "/var/support"}
+
+// sandboxRunRoot and sandboxRunFiles name the host /run files bound read-only
+// over the scratch /run: CubeCOS state markers, health stamps and pid files.
+// An allowlist, because /run also holds control sockets and key files.
+var (
+	sandboxRunRoot  = "/run"
+	sandboxRunFiles = []string{"cube_*", "health_*", "hex_*", "*.pid", "*_done", "is_sshable_*"}
+)
+
+// runMarkers lists the regular files in root that match sandboxRunFiles,
+// leaving out logs and names systemd's path lists cannot carry.
+func runMarkers(root string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, g := range sandboxRunFiles {
+		m, _ := filepath.Glob(filepath.Join(root, g))
+		for _, p := range m {
+			name := filepath.Base(p)
+			if seen[p] || strings.HasSuffix(name, ".log") || strings.ContainsAny(name, ": \t\n\\\"'") {
+				continue
+			}
+			if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
+				continue
+			}
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // SandboxArgvFor is SandboxArgv with the run's id, passed to the brokers so
 // their audit records name the run that called them.
@@ -84,6 +118,9 @@ func SandboxArgvFor(command string, timeout time.Duration, callID string) []stri
 	}
 	// A memory-only journal lives under /run/log; keep it readable.
 	props = append(props, "BindReadOnlyPaths=-/run/log")
+	for _, p := range runMarkers(sandboxRunRoot) {
+		props = append(props, "BindReadOnlyPaths=-"+p)
+	}
 	path := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
 	if SandboxBrokerDir != "" {
 		props = append(props, "BindReadOnlyPaths="+SandboxBrokerDir)
