@@ -118,6 +118,60 @@ func TestArgvIsLocalOrOverSSH(t *testing.T) {
 	}
 }
 
+func TestArgvSharedRidesOneConnectionPerNode(t *testing.T) {
+	p := RelayPlan{Node: "cmp2", Netns: "mgr-69a05958", IP: "192.168.1.103", Port: "443"}
+	shared := strings.Join(p.ArgvShared("/run/x"), " ")
+	for _, want := range []string{"ControlMaster=auto", "ControlPath=/run/x/%C", "ControlPersist=60", " root@cmp2 ip netns exec "} {
+		if !strings.Contains(shared, want) {
+			t.Errorf("shared argv lacks %s: %s", want, shared)
+		}
+	}
+	if strings.Contains(shared, "ControlPath=none") || !strings.Contains(strings.Join(p.Argv(false), " "), "ControlPath=none") {
+		t.Fatalf("only the unshared argv turns sharing off: %s", shared)
+	}
+}
+
+func TestDialSharesUpToTheSessionLimit(t *testing.T) {
+	var got []string
+	r := &NetnsRelay{OpenStack: neutron(t, oneLeg), Hostname: "ctl1", ControlDir: "/run/x",
+		start: func(argv []string) (net.Conn, error) { got = argv; a, _ := net.Pipe(); return a, nil }}
+	isShared := func() bool { return strings.Contains(strings.Join(got, " "), "ControlMaster=auto") }
+	var conns []net.Conn
+	for i := 0; i < sharedSessions; i++ {
+		c, err := r.Dial(context.Background(), "10.32.21.32:443")
+		if err != nil || !isShared() {
+			t.Fatalf("relay %d: shared=%v err=%v", i, isShared(), err)
+		}
+		conns = append(conns, c)
+	}
+	// one more than sshd allows on a connection gets its own
+	if _, err := r.Dial(context.Background(), "10.32.21.32:443"); err != nil || isShared() {
+		t.Fatalf("over the limit: shared=%v err=%v", isShared(), err)
+	}
+	conns[0].Close()
+	conns[0].Close() // a second close frees nothing more
+	if _, _ = r.Dial(context.Background(), "10.32.21.32:443"); !isShared() {
+		t.Fatal("a closed relay did not free its place")
+	}
+	if _, _ = r.Dial(context.Background(), "10.32.21.32:443"); isShared() {
+		t.Fatal("a double close freed two places")
+	}
+	// the node that holds the leg never goes over SSH
+	r.Hostname = "cmp2"
+	if _, _ = r.Dial(context.Background(), "10.32.21.32:443"); got[0] != "ip" {
+		t.Fatalf("argv %v", got)
+	}
+	// a failed start gives its place back
+	r2 := &NetnsRelay{OpenStack: neutron(t, oneLeg), Hostname: "ctl1", ControlDir: "/run/x",
+		start: func([]string) (net.Conn, error) { return nil, errors.New("no ssh") }}
+	for i := 0; i <= sharedSessions; i++ {
+		r2.Dial(context.Background(), "10.32.21.32:443")
+	}
+	if r2.shared["cmp2"] != 0 {
+		t.Fatalf("places leaked: %d", r2.shared["cmp2"])
+	}
+}
+
 func TestDialRunsLocallyOnTheNodeThatHoldsTheLeg(t *testing.T) {
 	var got []string
 	var audited RelayPlan

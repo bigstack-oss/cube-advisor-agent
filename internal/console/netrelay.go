@@ -40,7 +40,14 @@ var (
 var relaySSHArgs = []string{"-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
 	"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2",
 	"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-	"-o", "ControlPath=none", "-o", "LogLevel=ERROR"}
+	"-o", "LogLevel=ERROR"}
+
+// sharedSessions is how many relays ride one SSH connection to a node. sshd
+// allows 10 sessions a connection (MaxSessions); the rest connect on their own.
+const sharedSessions = 8
+
+// sharedIdle is how long an unused shared SSH connection stays open.
+const sharedIdle = "60"
 
 // Neutron is the admin OpenStack client the relay reads the network API with.
 type Neutron interface {
@@ -60,12 +67,26 @@ type RelayPlan struct {
 // this node; otherwise it goes over the cluster's node-to-node SSH. Every
 // element is validated by Plan, so none can be read as an option or by a shell.
 func (p RelayPlan) Argv(local bool) []string {
-	cmd := []string{"ip", "netns", "exec", p.Netns, "socat", "-", "TCP4:" + p.IP + ":" + p.Port + ",connect-timeout=5"}
 	if local {
-		return cmd
+		return p.command()
 	}
+	return p.ssh("-o", "ControlPath=none")
+}
+
+// ArgvShared is Argv over SSH, riding one connection per node kept under dir.
+// The first relay opens it; ssh falls back to its own connection if it cannot.
+func (p RelayPlan) ArgvShared(dir string) []string {
+	return p.ssh("-o", "ControlMaster=auto", "-o", "ControlPath="+dir+"/%C", "-o", "ControlPersist="+sharedIdle)
+}
+
+func (p RelayPlan) command() []string {
+	return []string{"ip", "netns", "exec", p.Netns, "socat", "-", "TCP4:" + p.IP + ":" + p.Port + ",connect-timeout=5"}
+}
+
+func (p RelayPlan) ssh(opts ...string) []string {
 	argv := append([]string{"ssh"}, relaySSHArgs...)
-	return append(append(argv, "root@"+p.Node), cmd...)
+	argv = append(argv, opts...)
+	return append(append(argv, "root@"+p.Node), p.command()...)
 }
 
 // NetnsRelay reaches an address the node cannot route to, through the leg
@@ -76,12 +97,16 @@ type NetnsRelay struct {
 	Hostname string
 	// Audit records each relayed open. Nil records nothing.
 	Audit func(target string, p RelayPlan, err error)
+	// ControlDir holds the sockets of shared SSH connections. It must be
+	// writable by this user only. Empty gives every relay its own connection.
+	ControlDir string
 
 	// start runs argv and returns its stdio as a connection; nil uses exec.
 	start func(argv []string) (net.Conn, error)
 
-	mu    sync.Mutex
-	plans map[string]cachedPlan
+	mu     sync.Mutex
+	plans  map[string]cachedPlan
+	shared map[string]int // relays on each node's shared connection
 }
 
 type cachedPlan struct {
@@ -208,12 +233,59 @@ func (r *NetnsRelay) Dial(ctx context.Context, hostport string) (net.Conn, error
 		if start == nil {
 			start = startProc
 		}
-		conn, err = start(p.Argv(strings.EqualFold(p.Node, r.Hostname)))
+		switch {
+		case strings.EqualFold(p.Node, r.Hostname):
+			conn, err = start(p.Argv(true))
+		case r.share(p.Node):
+			if conn, err = start(p.ArgvShared(r.ControlDir)); err != nil {
+				r.unshare(p.Node)
+			} else {
+				conn = &sharedConn{Conn: conn, done: func() { r.unshare(p.Node) }}
+			}
+		default:
+			conn, err = start(p.Argv(false))
+		}
 	}
 	if r.Audit != nil {
 		r.Audit(hostport, p, err)
 	}
 	return conn, err
+}
+
+// share takes a place on node's shared connection, if one is free.
+func (r *NetnsRelay) share(node string) bool {
+	if r.ControlDir == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.shared[node] >= sharedSessions {
+		return false
+	}
+	if r.shared == nil {
+		r.shared = map[string]int{}
+	}
+	r.shared[node]++
+	return true
+}
+
+func (r *NetnsRelay) unshare(node string) {
+	r.mu.Lock()
+	r.shared[node]--
+	r.mu.Unlock()
+}
+
+// sharedConn gives its place on the shared connection back when closed.
+type sharedConn struct {
+	net.Conn
+	done func()
+	once sync.Once
+}
+
+func (c *sharedConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.done)
+	return err
 }
 
 func (r *NetnsRelay) plan(ctx context.Context, hostport string) (RelayPlan, error) {
@@ -291,6 +363,8 @@ func startProc(argv []string) (net.Conn, error) {
 	}
 	c := &procConn{cmd: cmd, in: in, out: out}
 	cmd.Stderr = &c.errOut
+	// A shared SSH connection keeps running in the background with our stderr.
+	cmd.WaitDelay = time.Second
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("console: start the relay: %w", err)
 	}

@@ -307,6 +307,10 @@ func relayAuditor(a toolplane.Auditor) func(string, bool, string) {
 // relay's own connect.
 const webRelayTimeout = 20 * time.Second
 
+// webRelaySSHDir holds the sockets of the relay's shared SSH connections.
+// It is under /run, which the tool sandbox replaces, so no tool can reach them.
+const webRelaySSHDir = "/run/cube-advisor-agent/relay-ssh"
+
 // webHandler serves the allowlisted web targets. Where the node reads its
 // peers and holds an OpenStack credential, a target it cannot route to is
 // reached through the leg CubeCOS keeps on that target's network.
@@ -330,6 +334,10 @@ func webHandler(targets, nodeID string, a toolplane.Auditor) *console.WebHandler
 				Args:    map[string]string{"target": target, "node": p.Node, "netns": p.Netns, "address": p.IP},
 				Allowed: err == nil, Reason: reason})
 		},
+	}
+	// Without the directory every relay opens its own SSH connection.
+	if err := os.MkdirAll(webRelaySSHDir, 0o700); err == nil && os.Chmod(webRelaySSHDir, 0o700) == nil {
+		relay.ControlDir = webRelaySSHDir
 	}
 	h.Dial = console.FallbackDialer(nil, relay)
 	h.DialTimeout = webRelayTimeout
