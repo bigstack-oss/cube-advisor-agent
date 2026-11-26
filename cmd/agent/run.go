@@ -184,7 +184,7 @@ func runCmd(args []string) int {
 	srv := &agent.Server{
 		Tools:   reg,
 		Console: cons,
-		Web:     &console.WebHandler{Allow: console.FileAllowlist{Path: *webTargets}},
+		Web:     webHandler(*webTargets, id.NodeID, auditor),
 		Receive: &agent.Receiver{Audit: auditor},
 	}
 	backoff := tunnel.DefaultBackoff()
@@ -301,6 +301,39 @@ func relayAuditor(a toolplane.Auditor) func(string, bool, string) {
 		a.RecordToolCall(toolplane.ToolCall{At: time.Now().UTC(), Tool: "console-relay",
 			Args: map[string]string{"node": node}, Allowed: allowed, Reason: reason})
 	}
+}
+
+// webRelayTimeout covers a failed direct dial, the route lookup and the
+// relay's own connect.
+const webRelayTimeout = 20 * time.Second
+
+// webHandler serves the allowlisted web targets. Where the node reads its
+// peers and holds an OpenStack credential, a target it cannot route to is
+// reached through the leg CubeCOS keeps on that target's network.
+func webHandler(targets, nodeID string, a toolplane.Auditor) *console.WebHandler {
+	h := &console.WebHandler{Allow: console.FileAllowlist{Path: targets}}
+	if !broker.PeerReadsAvailable() {
+		return h
+	}
+	if _, err := os.Stat(openstack.OpenrcPath); err != nil {
+		return h
+	}
+	relay := &console.NetnsRelay{
+		OpenStack: openstack.NewAdmin(openstack.OpenrcPath),
+		Hostname:  nodeID,
+		Audit: func(target string, p console.RelayPlan, err error) {
+			reason := ""
+			if err != nil {
+				reason = err.Error()
+			}
+			a.RecordToolCall(toolplane.ToolCall{At: time.Now().UTC(), Tool: "web-relay",
+				Args:    map[string]string{"target": target, "node": p.Node, "netns": p.Netns, "address": p.IP},
+				Allowed: err == nil, Reason: reason})
+		},
+	}
+	h.Dial = console.FallbackDialer(nil, relay)
+	h.DialTimeout = webRelayTimeout
+	return h
 }
 
 // servedBrokers is set once the brokers are serving.

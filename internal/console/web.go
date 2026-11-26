@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"time"
 )
 
 // ErrNotAllowed is returned for a target this node does not expose.
@@ -85,6 +86,10 @@ type WebHandler struct {
 
 	// Dial opens the upstream connection; nil uses a real TCP dialler.
 	Dial Dialer
+
+	// DialTimeout bounds Dial; zero means dialTimeout. A dialler that may
+	// fall back to a relay needs longer than a loopback connect.
+	DialTimeout time.Duration
 }
 
 // Serve pipes rw to the allowlisted address for name.
@@ -103,7 +108,11 @@ func (h *WebHandler) Serve(ctx context.Context, name string, rw io.ReadWriter) e
 	if dial == nil {
 		dial = defaultDialer
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
+	timeout := h.DialTimeout
+	if timeout <= 0 {
+		timeout = dialTimeout
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	conn, err := dial(dialCtx, hostport)
 	if err != nil {
