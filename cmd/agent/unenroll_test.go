@@ -177,7 +177,6 @@ func listing(t *testing.T, dir string) string {
 	return strings.Join(names, "\n")
 }
 
-// behaviour: CONTROL-R6a
 func TestUnenrollTellsTheAdvisorTheCustomerCutTheClusterOff(t *testing.T) {
 	f := newFakeAdvisor(t)
 	dir := f.enrolledDir(t)
