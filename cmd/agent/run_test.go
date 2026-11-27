@@ -1,11 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
-	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/tunnelproto"
 )
 
@@ -54,58 +54,33 @@ func TestResolveServerAddrFailsClearlyWithNeither(t *testing.T) {
 	}
 }
 
-// #232: the Hello names what this node serves, so the SaaS can stop offering
-// tools its mirror admits and the node refuses.
-func TestHelloReportsTheServedLevelAndConsent(t *testing.T) {
-	reg, err := toolplane.New(nil, nopAuditor{},
-		toolplane.WithLevel(toolplane.LevelOperate),
-		toolplane.WithConsent(toolplane.ConsentNever))
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := helloFor("acme-prod-01", "SHA256:abc", reg)
-	if h.ServedLevel != "operate" || h.ServedConsent != "never" {
-		t.Errorf("hello served = %q/%q, want operate/never", h.ServedLevel, h.ServedConsent)
+// The Hello names no served level or consent, whatever the node's old files
+// say. An Advisor reads the empty fields as "nothing reported" and keeps its
+// own record, so an older one does not narrow to the lowest level.
+func TestHelloReportsNoServedLevelOrConsent(t *testing.T) {
+	h := helloFor("acme-prod-01", "SHA256:abc")
+	if h.ServedLevel != "" || h.ServedConsent != "" {
+		t.Errorf("hello served = %q/%q, want neither reported", h.ServedLevel, h.ServedConsent)
 	}
 	if h.ClusterID != "acme-prod-01" || h.Fingerprint != "SHA256:abc" || h.ProtocolVersion != tunnelproto.Version {
 		t.Errorf("hello lost its identity fields: %+v", h)
 	}
-}
-
-func TestHelloReportsObserveForANodeWithNoLevelFile(t *testing.T) {
-	reg, err := toolplane.New(nil, nopAuditor{}, toolplane.WithLevel(mustReadLevel(t, t.TempDir())))
+	b, err := json.Marshal(h)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := helloFor("c", "f", reg).ServedLevel; got != "observe" {
-		t.Errorf("served level = %q, want observe", got)
+	if strings.Contains(string(b), "served") {
+		t.Errorf("the wire frame still carries a served field: %s", b)
 	}
 }
-
-func mustReadLevel(t *testing.T, dir string) toolplane.Level {
-	t.Helper()
-	l, err := toolplane.ReadLevel(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return l
-}
-
-type nopAuditor struct{}
-
-func (nopAuditor) RecordToolCall(toolplane.ToolCall) {}
 
 func TestHelloCarriesTheCapabilities(t *testing.T) {
-	reg, err := toolplane.New(nil, nopAuditor{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer func() { capabilities = nil }()
-	if got := helloFor("c", "f", reg).Capabilities; len(got) != 0 {
+	if got := helloFor("c", "f").Capabilities; len(got) != 0 {
 		t.Fatalf("Capabilities = %v before any are set", got)
 	}
 	capabilities = []string{tunnelproto.ConsoleRelay}
-	if got := helloFor("c", "f", reg).Capabilities; len(got) != 1 || got[0] != "console-relay" {
+	if got := helloFor("c", "f").Capabilities; len(got) != 1 || got[0] != "console-relay" {
 		t.Fatalf("Capabilities = %v, want [console-relay]", got)
 	}
 }

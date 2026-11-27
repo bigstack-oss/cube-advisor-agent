@@ -4,8 +4,8 @@
 // starting a job included, go through the recorded console instead.
 //
 // Every call, served or refused, is written to a local append-only log the
-// customer can read. The node's action level and consent files are still read
-// and reported in the Hello; the Advisor applies them.
+// customer can read. The node holds no action level; the Advisor's record
+// decides what is asked of it.
 package toolplane
 
 import (

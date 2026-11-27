@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 )
 
@@ -42,55 +40,10 @@ type settingState struct {
 
 // settings is every per-cluster setting this agent reads. Adding one is adding
 // an entry here, and there is no second place to forget.
-var settings = []setting{actionLevel, consentDial}
-
-// actionLevel is the cluster's own action level (ADR 0011).
 //
-// Read once at startup so a malformed value is one loud line rather than a
-// mystery repeated per call. Absent, empty and whitespace all mean observe and
-// are not errors; a word that is not a level is an error, and the level is
-// still applied, because ReadLevel answers observe alongside it and serving
-// reads beats refusing to start.
-var actionLevel = setting{
-	name: "action level",
-	file: toolplane.LevelFileName,
-	load: func(dir string) settingState {
-		level, err := toolplane.ReadLevel(dir)
-		st := settingState{opt: toolplane.WithLevel(level)}
-		if err != nil {
-			st.broken = true
-			st.line = fmt.Sprintf("action level: %v; serving %s until it is corrected", err, level)
-			return st
-		}
-		st.line = fmt.Sprintf("action level: %s", level)
-		return st
-	},
-}
-
-// consentDial is how much this cluster asks a person before acting
-// (ADR 0011, amended).
-//
-// Read once at startup, like the level and for the same reason. Absent, empty
-// and whitespace mean always and are not errors; a word that is not a setting
-// is an error, and the setting is still applied because ReadConsent answers
-// always alongside it — asking too much beats refusing to start.
-//
-// The agent reports it in the Hello; the Advisor applies it.
-var consentDial = setting{
-	name: "consent",
-	file: toolplane.ConsentFileName,
-	load: func(dir string) settingState {
-		c, err := toolplane.ReadConsent(dir)
-		st := settingState{opt: toolplane.WithConsent(c)}
-		if err != nil {
-			st.broken = true
-			st.line = fmt.Sprintf("consent: %v; asking for %s until it is corrected", err, c)
-			return st
-		}
-		st.line = fmt.Sprintf("consent: %s", c)
-		return st
-	},
-}
+// Empty today: the action level and consent are the Advisor's record alone,
+// and the node's old action-level and consent files are not read.
+var settings = []setting{}
 
 // configure builds the tool plane from the operator's configuration in dir.
 //

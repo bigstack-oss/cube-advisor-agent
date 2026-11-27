@@ -71,6 +71,28 @@ cluster needs three tokens. The certificate that comes back carries the node in
 its `CommonName` and the cluster in its single `OrganizationalUnit`;
 `cube-advisor-agent status` prints both.
 
+### Action level and consent
+
+The Advisor's own record is the only source of a cluster's action level. The
+agent reads no `action-level` or `consent` file, writes none at enrolment and
+reports none when it connects. Files an older agent left in
+`/etc/cube/advisor-agent/` are ignored and not removed.
+
+### Unenrolling
+
+```sh
+cube-advisor-agent unenroll [-timeout 10s] [-reason <text>]
+```
+
+The customer's kill switch. CubeCOS runs it on each node before it stops the
+service and deletes the node's identity. It connects as `run` does (same
+identity, same egress proxy), tells the Advisor the customer cut this cluster
+off, and exits. It deletes no file and stops nothing.
+
+It is best effort: exit `0` when the Advisor was told, exit `7` with one line
+on stderr when it could not be (unreachable, no identity, identity revoked,
+timeout). The caller carries on either way.
+
 ### Upgrading from a per-cluster identity
 
 Agents enrolled before per-node identity **must re-enrol**. Their certificates

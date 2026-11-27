@@ -241,9 +241,9 @@ func (s *Session) AcceptChannel(ctx context.Context) (*Channel, error) {
 	return &Channel{Conn: stream, Open: open, r: br}, nil
 }
 
-// SendKillSwitch tells the peer to drop everything. The customer holds this
-// control, so it takes effect on the peer's next read rather than waiting for
-// anything in flight to finish.
+// SendKillSwitch tells the peer to drop everything, on the control stream. The
+// customer holds this control, so it takes effect on the peer's next read
+// rather than waiting for anything in flight to finish.
 func (s *Session) SendKillSwitch(k tunnelproto.KillSwitch) error {
 	if err := s.ctlEnc.Encode(k); err != nil {
 		return fmt.Errorf("tunnel: send kill switch: %w", err)
@@ -251,7 +251,8 @@ func (s *Session) SendKillSwitch(k tunnelproto.KillSwitch) error {
 	return nil
 }
 
-// AwaitKillSwitch blocks until the peer sends one.
+// AwaitKillSwitch blocks until the peer sends one on the control stream. An
+// error means the session ended without one. Call it from one goroutine only.
 func (s *Session) AwaitKillSwitch() (tunnelproto.KillSwitch, error) {
 	var k tunnelproto.KillSwitch
 	err := s.ctlDec.Decode(&k)

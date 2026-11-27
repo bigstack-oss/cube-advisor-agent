@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 )
 
 func TestNodeRoleReadsCubesysPolicy(t *testing.T) {
@@ -21,11 +19,7 @@ func TestNodeRoleReadsCubesysPolicy(t *testing.T) {
 	if got := nodeRole(); got != "compute" {
 		t.Errorf("role %q, want compute", got)
 	}
-	reg, err := toolplane.New(nil, nopAuditor{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := helloFor("c", "f", reg).NodeRole; got != "compute" {
+	if got := helloFor("c", "f").NodeRole; got != "compute" {
 		t.Errorf("hello carries role %q", got)
 	}
 }

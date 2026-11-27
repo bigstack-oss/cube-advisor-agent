@@ -43,8 +43,8 @@ func TestConfigCheckExitsZeroWhenEverySettingIsValid(t *testing.T) {
 }
 
 // Absent is the ordinary state of a cluster that has not opted in, and every
-// setting but the action level is optional. Nothing configured is not an
-// operator error, so it must not exit non-zero.
+// setting is optional. Nothing configured is not an operator error, so it
+// must not exit non-zero.
 func TestConfigCheckExitsZeroOnAnUnconfiguredDirectory(t *testing.T) {
 	code, out, _ := configCheck(t, "-dir", t.TempDir())
 	if code != exitOK {
@@ -52,26 +52,20 @@ func TestConfigCheckExitsZeroOnAnUnconfiguredDirectory(t *testing.T) {
 	}
 }
 
-// A setting the operator wrote and this agent cannot honour is what the
-// command exists to find: it exits non-zero and names which one.
-func TestConfigCheckReportsABrokenSettingAndExitsNonZero(t *testing.T) {
+// A malformed leftover action-level file is not a setting any more, so the
+// check passes and does not mention it.
+func TestConfigCheckIgnoresALeftoverActionLevelFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, toolplane.LevelFileName), []byte("operator\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "action-level"), []byte("operator\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	code, out, errOut := configCheck(t, "-dir", dir)
-	if code != exitConfigBroken {
-		t.Fatalf("exit = %d, want %d for a broken setting:\n%s%s", code, exitConfigBroken, out, errOut)
+	if code != exitOK {
+		t.Fatalf("exit = %d, want %d for a leftover level file:\n%s%s", code, exitOK, out, errOut)
 	}
-	if !strings.Contains(errOut, "action level") {
-		t.Errorf("the failure should name the broken setting, not just fail:\n%s", errOut)
-	}
-	if !strings.Contains(out, "operator") {
-		t.Errorf("the report should quote what the operator wrote, so they can see their own typo:\n%s", out)
-	}
-	if strings.Contains(out, uncheckedNotice) {
-		t.Error("a failing check must not print the reassurance a passing one does")
+	if strings.Contains(out+errOut, "action level") || strings.Contains(out+errOut, "operator") {
+		t.Errorf("the check still reports the node's level file:\n%s%s", out, errOut)
 	}
 }
 
@@ -144,6 +138,13 @@ func TestConfigRejectsAnUnknownSubcommand(t *testing.T) {
 // switch — and captures what it printed.
 func configCheck(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
+	return dispatchCaptured(t, append([]string{"config", "check"}, args...)...)
+}
+
+// dispatchCaptured runs one subcommand through main's switch and captures
+// what it printed.
+func dispatchCaptured(t *testing.T, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
 	outR, outW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +168,7 @@ func configCheck(t *testing.T, args ...string) (code int, stdout, stderr string)
 		copyInto(&errBuf, errR)
 	}()
 
-	code = dispatch(append([]string{"config", "check"}, args...))
+	code = dispatch(args)
 
 	os.Stdout, os.Stderr = realOut, realErr
 	_ = outW.Close()

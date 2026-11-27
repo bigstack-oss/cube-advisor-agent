@@ -76,9 +76,9 @@ type Hello struct {
 	AgentVersion    string `json:"agentVersion"`    // release of the agent binary
 	ProtocolVersion int    `json:"protocolVersion"` // what this agent speaks
 
-	// ServedLevel and ServedConsent are what this node enforces, from its own
-	// files. Advisory to the SaaS: it narrows what it offers to them and never
-	// widens. Empty from agents that predate them.
+	// ServedLevel and ServedConsent were what a node enforced from its own
+	// files. No longer sent: the Advisor's record alone decides. An Advisor
+	// reads empty as "nothing reported" and keeps its own record.
 	ServedLevel   string `json:"servedLevel,omitempty"`
 	ServedConsent string `json:"servedConsent,omitempty"`
 
@@ -345,8 +345,9 @@ func (c ChannelOpen) Validate() error {
 	return nil
 }
 
-// KillSwitch is sent agent→SaaS when the customer disables the agent. The SaaS
-// must drop every open channel, including live console sessions.
+// KillSwitch is sent agent→SaaS on the control stream when the customer cuts
+// the cluster off (`cube-advisor-agent unenroll`). The SaaS must drop every
+// open channel, including live console sessions.
 type KillSwitch struct {
 	Reason string `json:"reason,omitempty"`
 }

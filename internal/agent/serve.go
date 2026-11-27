@@ -136,10 +136,10 @@ func (s *Server) handle(ctx context.Context, ch *tunnel.Channel) {
 // never sent: a SaaS that could tell them apart could map the cluster by
 // asking for names and watching which answer differently.
 func (s *Server) serveConsole(ctx context.Context, ch *tunnel.Channel) {
-	// The shell tool is served at every level (ADR 0019): an admin approves
-	// its risky commands in the SaaS, and the session is recorded there.
+	// The shell tool is served like a human console (ADR 0019): an admin
+	// approves its risky commands in the SaaS, and the session is recorded there.
 	if ch.Open.AgentDriven {
-		log.Printf("agent: agent-driven console at action level %s", s.Tools.Level())
+		log.Printf("agent: agent-driven console")
 	}
 	switch ch.Open.Target.Kind {
 	case tunnelproto.TargetSSH:

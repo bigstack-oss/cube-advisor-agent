@@ -363,6 +363,43 @@ func TestChannelHeaderAndPayloadInOneWriteBothSurvive(t *testing.T) {
 }
 
 // Either side can time a round trip; a closed session cannot.
+// The agent's kill switch crosses the control stream to the SaaS side.
+func TestKillSwitchReachesThePeerOnTheControlStream(t *testing.T) {
+	agent, saas, err := pair(t, goodHello(), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	got := make(chan tunnelproto.KillSwitch, 1)
+	go func() {
+		if k, err := saas.AwaitKillSwitch(); err == nil {
+			got <- k
+		}
+	}()
+	if err := agent.SendKillSwitch(tunnelproto.KillSwitch{Reason: "cut off"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	select {
+	case k := <-got:
+		if k.Reason != "cut off" {
+			t.Errorf("reason = %q, want cut off", k.Reason)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the kill switch never reached the peer")
+	}
+}
+
+// A session that just ends is not a kill switch.
+func TestASessionEndingIsNotAKillSwitch(t *testing.T) {
+	agent, saas, err := pair(t, goodHello(), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	agent.Close()
+	if k, err := saas.AwaitKillSwitch(); err == nil {
+		t.Errorf("AwaitKillSwitch = %+v with no error after a plain close", k)
+	}
+}
+
 func TestPingTimesARoundTrip(t *testing.T) {
 	agent, saas, err := pair(t, goodHello(), nil)
 	if err != nil {

@@ -29,26 +29,8 @@ type effect struct {
 
 func effects(t *testing.T) []effect {
 	t.Helper()
-	return []effect{
-		{
-			name:    "action level",
-			file:    toolplane.LevelFileName,
-			content: "operate\n",
-			// Readable by anyone, writable by nobody else: the level is a
-			// policy statement, and ReadLevel refuses a file others may write.
-			mode:    0o644,
-			observe: func(r *toolplane.Registry) string { return r.Level().String() },
-		},
-		{
-			name:    "consent",
-			file:    toolplane.ConsentFileName,
-			content: "never\n",
-			// The level's rule, for a sharper reason: whoever may write this
-			// file can stop the cluster asking a person before it acts.
-			mode:    0o644,
-			observe: func(r *toolplane.Registry) string { return r.Consent().String() },
-		},
-	}
+	// No settings today: the level and consent are the Advisor's record.
+	return []effect{}
 }
 
 // A setting configure loads but nothing asserts, or asserts but configure does
@@ -108,37 +90,39 @@ func TestEverySettingReachesTheRegistryThroughConfigure(t *testing.T) {
 	}
 }
 
-// A setting an operator wrote and this agent cannot honour is marked broken,
-// and the agent still configures: a malformed credential must not take
-// diagnosis away at the moment it is needed.
-func TestABrokenSettingIsMarkedAndStillConfigures(t *testing.T) {
+// The node's old action-level and consent files are not read: whatever they
+// say, well-formed or not, changes nothing and is left on disk.
+func TestTheNodesLevelAndConsentFilesAreIgnoredAndLeftAlone(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, toolplane.LevelFileName), []byte("operator\n"), 0o644); err != nil {
-		t.Fatal(err)
+	old := map[string]string{"action-level": "operator\n", "consent": "never\n"}
+	for name, content := range old {
+		// World-writable, which the old reader refused.
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o666); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	reg, states, err := configure(dir, toolplane.Tools, discardAuditor())
 	if err != nil {
-		t.Fatalf("configure refused to build a registry over a malformed setting: %v", err)
+		t.Fatalf("configure: %v", err)
 	}
-	if reg.Level() != toolplane.DefaultLevel {
-		t.Errorf("Level() = %s over a malformed file, want %s", reg.Level(), toolplane.DefaultLevel)
-	}
-
-	var broken []string
 	for _, st := range states {
-		if st.line == "" {
-			t.Error("a setting reported no startup line")
-		}
-		if st.broken {
-			broken = append(broken, st.line)
+		if st.broken || strings.Contains(st.line, "level") || strings.Contains(st.line, "consent") {
+			t.Errorf("a leftover file still reaches configure: %+v", st)
 		}
 	}
-	if len(broken) != 1 {
-		t.Fatalf("broken settings = %d, want exactly the malformed action level: %v", len(broken), broken)
+	plain := configureIn(t, t.TempDir())
+	if got, want := strings.Join(reg.Names(), ","), strings.Join(plain.Names(), ","); got != want {
+		t.Errorf("tools served = %s with the old files, %s without", got, want)
 	}
-	if !strings.Contains(broken[0], "operator") {
-		t.Errorf("the line should quote what the operator wrote, so they can see their own typo: %q", broken[0])
+	if strings.Contains(summaryLine(reg), "level") {
+		t.Errorf("the startup line still names a level: %q", summaryLine(reg))
+	}
+	for name, content := range old {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(b) != content {
+			t.Errorf("%s = %q, %v; want it left as it was", name, b, err)
+		}
 	}
 }
 
@@ -159,9 +143,6 @@ func TestAnUnconfiguredDirectoryReportsEverySettingAndServesReads(t *testing.T) 
 		if st.broken {
 			t.Errorf("setting %q is broken when nothing is configured: %s", settings[i].name, st.line)
 		}
-	}
-	if reg.Level() != toolplane.DefaultLevel {
-		t.Errorf("Level() = %s with nothing configured, want %s", reg.Level(), toolplane.DefaultLevel)
 	}
 	if len(reg.Names()) == 0 {
 		t.Error("an unconfigured agent serves no tools; it should still serve its reads")

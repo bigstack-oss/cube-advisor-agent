@@ -117,14 +117,12 @@ func (e *Enroller) Enroll(ctx context.Context, clusterID, nodeID, token string) 
 	}
 
 	id := &Identity{
-		ClusterID:   clusterID,
-		NodeID:      nodeID,
-		ActionLevel: out.ActionLevel,
-		Consent:     out.Consent,
-		ConsoleCA:   out.ConsoleCA,
-		key:         key,
-		certPEM:     []byte(out.Certificate),
-		caPEM:       []byte(out.CA),
+		ClusterID: clusterID,
+		NodeID:    nodeID,
+		ConsoleCA: out.ConsoleCA,
+		key:       key,
+		certPEM:   []byte(out.Certificate),
+		caPEM:     []byte(out.CA),
 	}
 	// A certificate that does not match the key we just made means something is
 	// badly wrong upstream; better to fail here than at the first tunnel dial.

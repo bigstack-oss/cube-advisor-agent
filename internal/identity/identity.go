@@ -43,10 +43,6 @@ const keyFileMode os.FileMode = 0o600
 type Identity struct {
 	ClusterID string
 	NodeID    string
-	// ActionLevel and Consent as the Advisor reported them at enrolment;
-	// not part of the saved identity — the toolplane keeps its own files.
-	ActionLevel string
-	Consent     string
 	// ConsoleCA as the Advisor reported it; written beside the identity as
 	// console-ca.pub for the OS to install.
 	ConsoleCA string

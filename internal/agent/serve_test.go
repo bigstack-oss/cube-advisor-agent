@@ -535,49 +535,37 @@ func TestThePlanesCannotReachEachOther(t *testing.T) {
 	}
 }
 
-// harnessConsoleAtLevel is harnessWithConsole plus an action level, for the
-// The agent-driven console (ADR 0019): served at every level.
-func harnessConsoleAtLevel(t *testing.T, con *console.Handler, level toolplane.Level) (*tunnel.Session, *recorder) {
-	t.Helper()
-	return harnessFull(t, con, func(r *toolplane.Registry) { toolplane.WithLevel(level)(r) })
-}
+// An agent-driven console is served exactly as a human one, with no node-side
+// level to refuse it: it reaches the node's sshd (ADR 0019).
+func TestAgentDrivenConsoleIsServedWithNoNodeSideLevel(t *testing.T) {
+	saas, _ := harnessWithConsole(t, &console.Handler{NodeID: "sky141", Dial: echoSSHD(t)})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-// An agent-driven console is served at every level, exactly as a human one:
-// it reaches the node's sshd (ADR 0019).
-func TestAgentDrivenConsoleServedAtEveryLevel(t *testing.T) {
-	for i, level := range []toolplane.Level{toolplane.LevelObserve, toolplane.LevelOperate, toolplane.LevelInternal} {
-		t.Run(level.String(), func(t *testing.T) {
-			saas, _ := harnessConsoleAtLevel(t, &console.Handler{NodeID: "sky141", Dial: echoSSHD(t)}, level)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
+	ch, err := saas.OpenChannel(ctx, 21, tunnelproto.ChannelConsole,
+		tunnelproto.Target{Kind: tunnelproto.TargetSSH, Name: "sky141"}, tunnel.AgentDriven())
+	if err != nil {
+		t.Fatalf("open agent-driven console: %v", err)
+	}
+	defer ch.Close()
 
-			ch, err := saas.OpenChannel(ctx, uint32(21+i), tunnelproto.ChannelConsole,
-				tunnelproto.Target{Kind: tunnelproto.TargetSSH, Name: "sky141"}, tunnel.AgentDriven())
-			if err != nil {
-				t.Fatalf("open agent-driven console: %v", err)
-			}
-			defer ch.Close()
-
-			if _, err := ch.Write([]byte("hello")); err != nil {
-				t.Fatalf("write: %v", err)
-			}
-			_ = ch.SetDeadline(time.Now().Add(5 * time.Second))
-			buf := make([]byte, 5)
-			if _, err := io.ReadFull(ch, buf); err != nil {
-				t.Fatalf("read: %v", err)
-			}
-			if string(buf) != "HELLO" {
-				t.Errorf("echo = %q, want HELLO", buf)
-			}
-		})
+	if _, err := ch.Write([]byte("hello")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = ch.SetDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(ch, buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(buf) != "HELLO" {
+		t.Errorf("echo = %q, want HELLO", buf)
 	}
 }
 
-// A human console (no agent-driven mark) is unaffected by the action level:
-// console access is its own permission, gated on the node and in the SaaS, not
-// by the level the AI plane obeys.
-func TestHumanConsoleUnaffectedByLevel(t *testing.T) {
-	saas, _ := harnessConsoleAtLevel(t, &console.Handler{NodeID: "sky141", Dial: echoSSHD(t)}, toolplane.LevelObserve)
+// A human console (no agent-driven mark) is its own permission, gated on the
+// node and in the SaaS.
+func TestHumanConsoleIsServed(t *testing.T) {
+	saas, _ := harnessWithConsole(t, &console.Handler{NodeID: "sky141", Dial: echoSSHD(t)})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

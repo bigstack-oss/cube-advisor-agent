@@ -158,7 +158,7 @@ func runCmd(args []string) int {
 	}
 	capabilities = append(capabilities, tunnelproto.JobsCapability, tunnelproto.PackageReceiveCapability,
 		tunnelproto.UpdateReadsCapability)
-	hello := helloFor(id.ClusterID, fp, reg)
+	hello := helloFor(id.ClusterID, fp)
 	url := "wss://" + serverAddr + tunnel.WSPath
 	// The websocket library dials the wss URL as https.
 	proxy, proxyLine := egressProxy(*dir, &neturl.URL{Scheme: "https", Host: serverAddr}, http.ProxyFromEnvironment)
@@ -276,16 +276,14 @@ func resolveServerAddr(explicit, dir string) (string, error) {
 	return persisted, nil
 }
 
-// helloFor builds the opening frame, naming the level and consent this node
-// serves (#232).
-func helloFor(clusterID, fingerprint string, reg *toolplane.Registry) tunnelproto.Hello {
+// helloFor builds the opening frame. It names no served level or consent: the
+// Advisor's own record decides both.
+func helloFor(clusterID, fingerprint string) tunnelproto.Hello {
 	return tunnelproto.Hello{
 		ClusterID:       clusterID,
 		Fingerprint:     fingerprint,
 		AgentVersion:    version,
 		ProtocolVersion: tunnelproto.Version,
-		ServedLevel:     reg.Level().String(),
-		ServedConsent:   reg.Consent().String(),
 		Brokers:         servedBrokers,
 		NodeRole:        nodeRole(),
 		Capabilities:    capabilities,

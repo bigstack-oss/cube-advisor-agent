@@ -57,10 +57,6 @@ type Registry struct {
 
 	// run executes a command; swapped in tests so the suite never shells out.
 	run func(ctx context.Context, argv []string, maxBytes int) ([]byte, error)
-
-	// level and consent are this node's files, reported in the Hello.
-	level   Level
-	consent Consent
 }
 
 // New builds a registry over tools.
@@ -73,8 +69,6 @@ func New(tools []Tool, audit Auditor, opts ...Option) (*Registry, error) {
 		audit:   audit,
 		timeout: defaultTimeout,
 		run:     runCommand,
-		level:   DefaultLevel,
-		consent: DefaultConsent,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -93,22 +87,6 @@ func New(tools []Tool, audit Auditor, opts ...Option) (*Registry, error) {
 
 // Option configures a Registry at construction.
 type Option func(*Registry)
-
-// WithLevel sets the action level this node reports.
-func WithLevel(l Level) Option {
-	return func(r *Registry) { r.level = l }
-}
-
-// Level is the action level this node reports.
-func (r *Registry) Level() Level { return r.level }
-
-// WithConsent sets the consent setting this node reports.
-func WithConsent(c Consent) Option {
-	return func(r *Registry) { r.consent = c }
-}
-
-// Consent is the consent setting this node reports.
-func (r *Registry) Consent() Consent { return r.consent }
 
 // SetRunnerForTest replaces the executor.
 //

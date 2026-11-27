@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/bigstack-oss/cube-advisor-agent/internal/identity"
-	"github.com/bigstack-oss/cube-advisor-agent/internal/toolplane"
 	"github.com/bigstack-oss/cube-advisor-agent/pkg/enrollproto"
 )
 
@@ -116,6 +115,7 @@ func TestExitCodesAreDistinct(t *testing.T) {
 	for name, code := range map[string]int{
 		"ok": exitOK, "usage": exitUsage, "already": exitAlready,
 		"tokenRefused": exitTokenRefused, "unreachable": exitUnreachable, "failed": exitFailed,
+		"configBroken": exitConfigBroken, "notTold": exitNotTold,
 	} {
 		if prev, dup := seen[code]; dup {
 			t.Errorf("%s and %s share exit code %d; an installer cannot branch on them", name, prev, code)
@@ -218,34 +218,30 @@ func fakeEnrollServerFull(t *testing.T, level, consent, consoleCA string) *httpt
 	}))
 }
 
-// The dials the Advisor will serve at are what the node writes beside its
-// identity — the token the operator pasted is not the last word, the
-// cluster's record is. Silence from an older Advisor leaves the files alone.
-func TestEnrollRecordsTheDialsTheAdvisorReports(t *testing.T) {
+// Enrolment writes no level or consent file, whatever the Advisor reports,
+// and leaves files an older agent wrote as they were.
+func TestEnrollWritesNoLevelOrConsentFile(t *testing.T) {
 	dir := t.TempDir()
 	srv := fakeEnrollServerWithDials(t, "operate", "destructive")
 	defer srv.Close()
 	if code := enrollCmd([]string{"-server", srv.URL, "-cluster", "c", "-dir", dir, "-token", "t"}); code != exitOK {
 		t.Fatalf("enrollCmd exit = %d", code)
 	}
-	if l, err := toolplane.ReadLevel(dir); err != nil || l != toolplane.LevelOperate {
-		t.Errorf("level = %v, %v; want operate", l, err)
-	}
-	if c, err := toolplane.ReadConsent(dir); err != nil || c != toolplane.ConsentDestructive {
-		t.Errorf("consent = %v, %v; want destructive", c, err)
+	for _, name := range []string{"action-level", "consent"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("enrolment wrote %s (stat err %v)", name, err)
+		}
 	}
 
-	quiet := t.TempDir()
-	if err := os.WriteFile(filepath.Join(quiet, toolplane.LevelFileName), []byte("internal\n"), 0o644); err != nil {
+	kept := t.TempDir()
+	if err := os.WriteFile(filepath.Join(kept, "action-level"), []byte("internal\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	old := fakeEnrollServer(t)
-	defer old.Close()
-	if code := enrollCmd([]string{"-server", old.URL, "-cluster", "c", "-dir", quiet, "-token", "t"}); code != exitOK {
+	if code := enrollCmd([]string{"-server", srv.URL, "-cluster", "c", "-dir", kept, "-token", "t"}); code != exitOK {
 		t.Fatalf("enrollCmd exit = %d", code)
 	}
-	if l, _ := toolplane.ReadLevel(quiet); l != toolplane.LevelInternal {
-		t.Errorf("an Advisor that named no level changed the node's to %v", l)
+	if b, err := os.ReadFile(filepath.Join(kept, "action-level")); err != nil || string(b) != "internal\n" {
+		t.Errorf("leftover action-level = %q, %v; want it left alone", b, err)
 	}
 }
 
@@ -332,7 +328,7 @@ func TestUsageMentionsEverySubcommand(t *testing.T) {
 	buf := make([]byte, 4096)
 	n, _ := r.Read(buf)
 	out := string(buf[:n])
-	for _, cmd := range []string{"enroll", "status", "version"} {
+	for _, cmd := range []string{"enroll", "run", "unenroll", "config", "status", "job", "version"} {
 		if !strings.Contains(out, cmd) {
 			t.Errorf("usage does not mention %q", cmd)
 		}

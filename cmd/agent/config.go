@@ -118,7 +118,7 @@ func (discardWriteCloser) Close() error { return nil }
 // check's last line. One formatting, so the two cannot describe the same
 // registry differently.
 func summaryLine(reg *toolplane.Registry) string {
-	return fmt.Sprintf("action level %s; serving %d tool(s)", reg.Level(), len(reg.Names()))
+	return fmt.Sprintf("serving %d tool(s)", len(reg.Names()))
 }
 
 func plural(n int, one, many string) string {
